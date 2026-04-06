@@ -1,0 +1,115 @@
+#########################################################################################################
+
+###Obter share de estudantes do Censo Superior encontrados no censo básico, por ano
+
+#########################################################################################################
+rm(list = ls());gc()
+
+###Carregar pacotes
+library(tidyverse)
+library(data.table)
+library(duckdb)
+library(readr)
+library(glue)
+library(arrow)
+library(DBI)
+
+###Definir diretórios
+
+##Diretório das crosswalks
+crosswalk_dir <- "T:/9. Processado/crosswalks"
+
+#Arquivo com cpfs que deram match exato
+cpf_matched <- "T:/9. Processado/crosswalks/matched_cpfs.parquet" ###Pode ser que o nome do arquivo esteja errado. Por favor, verifique na pasta
+#Arquivo com cpfs dos que foram pareados por meio do fuzzy match de nomes
+fuzzy_matched <- "" #Esse eu não lembro o nome exato. Mas é o mais recente na pata de crosswalks
+
+###Diretório do censo da educação superior
+dir_ces <- "B:CENSO_SUPERIOR/SUP_ALUNO"
+
+###Abrir conexão com o DuckDB
+con <- dbConnect(duckdb())
+
+dbExecute(con, "PRAGMA memory_limit = '15GB';")  # talvez possamos colocar 10-15 GB no sedap
+
+
+###########################################################################
+
+###Criar tabela com cpfs dos dois arquivos de crosswalks
+
+##########################################################################
+###Cheque antes se os nomes das colunas estão corretos
+check_exact <- open_dataset(cpf_matched)
+colnames(check_exact)
+
+check_fuzzy <- open_dataset(fuzzy_matched)
+colnames(check_fuzzy)
+
+###Criar tabela com os cpfs dois dois processos de match
+
+dbExecute(con, sprintf("
+CREATE OR REPLACE TABLE cpfs_unificados AS
+SELECT CAST(CPF_MASC AS VARCHAR) AS CPF_MASC
+FROM read_parquet('%s')
+WHERE CPF_MASC IS NOT NULL
+UNION ALL
+SELECT CAST(CPF_MASC_cs AS VARCHAR) AS CPF_MASC
+FROM read_parquet('%s')
+WHERE CPF_MASC_cs IS NOT NULL
+", cpf_matched, fuzzy_matched))
+
+
+###########################################################################
+
+###Fazer o join com o censo da educação superior e obter o share de estudantes encontrados no censo básico, por ano
+
+###########################################################################
+
+share_matches_ano <- dbGetQuery(con, sprintf("
+WITH censo_superior AS (
+    SELECT
+        CAST(CPF_MASC AS VARCHAR) AS CPF_MASC,
+        CAST(NU_ANO AS INTEGER) AS NU_ANO
+    FROM read_csv_auto('%s/SUP_ALUNO_*.csv', union_by_name = TRUE)
+    WHERE CPF_MASC IS NOT NULL
+      AND NU_ANO IS NOT NULL
+      AND NU_ANO_INGRESSO >= 2006
+),
+cpfs_match AS (
+    SELECT DISTINCT CPF_MASC
+    FROM cpfs_unificados
+    WHERE CPF_MASC IS NOT NULL
+),
+totais AS (
+    SELECT
+        NU_ANO,
+        COUNT(DISTINCT CPF_MASC) AS n_cpfs_unicos_ces
+    FROM censo_superior
+    GROUP BY NU_ANO
+),
+matches AS (
+    SELECT
+        c.NU_ANO,
+        COUNT(DISTINCT c.CPF_MASC) AS n_cpfs_unicos_match
+    FROM censo_superior c
+    INNER JOIN cpfs_match m USING (CPF_MASC)
+    GROUP BY c.NU_ANO
+)
+SELECT
+    t.NU_ANO,
+    t.n_cpfs_unicos_ces,
+    COALESCE(m.n_cpfs_unicos_match, 0) AS n_cpfs_unicos_match,
+    COALESCE(m.n_cpfs_unicos_match, 0) * 1.0 / t.n_cpfs_unicos_ces AS share_match
+FROM totais t
+LEFT JOIN matches m USING (NU_ANO)
+ORDER BY t.NU_ANO
+", dir_ces))
+
+
+###Agora pode salvar em um path de sua escolha
+out_path <- ""
+
+write_csv(share_matches_ano, out_path)
+
+print(share_matches_ano)
+
