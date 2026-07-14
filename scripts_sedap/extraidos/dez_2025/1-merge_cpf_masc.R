@@ -223,7 +223,7 @@ for (b in 1:128){
       FROM read_parquet('%s') AS o
       INNER JOIN read_parquet('%s') AS s
         ON o.CPF_MASC = s.CPF_MASC
-    ) TO '%s' (FORMAT PARQUET);
+    ) TO '%s' (FORMAT PARQUET, PARTITION_BY bucket, OVERWRITE_OR_IGNORE);
   ", bas_pattern, sup_pattern, out_file)
   
   dbExecute(con, sql)
@@ -308,4 +308,22 @@ dbExecute(con, sprintf("
 ", matched_cpf_dir, unique_ids)) ####11966517
 
 
+
+
+dbExecute(con, sprintf("
+COPY(
+SELECT *, (hash(CPF_MASC_combined) %%128 + 1) as bucket_cpf
+FROM (
+SELECT cb.*, cw.*, COALESCE(cw.CPF_MASC, cb.CPF_MASC) AS CPF_MASC_combined, 
+read_parquet('%s') cb
+LEFT JOIN  read_parquet('%s') cw
+ON cb.CO_PESSOA_FISICA = cw.CO_PESSOA_FISICA)) 
+TO '%s/cpf_census_sub_bas'
+  (FORMAT PARQUET, PARTITION_BY bucket_cpf, OVERWRITE_OR_IGNORE);
+
+
+
+
+
+"))
 

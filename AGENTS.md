@@ -38,4 +38,5 @@ If a task involves schema interpretation, dataset integration, or variable selec
 1. Keep scripts compatible with offline execution and local filesystem access.
 2. Prefer explicit paths, clear input/output assumptions, and comments only where they materially clarify non-obvious logic.
 3. Avoid introducing unnecessary dependencies, especially dependencies that are difficult to install in a locked-down terminal environment.
-4. When proposing or generating shell commands, default to `PowerShell` syntax and conventions.
+4. Do not create new functions or helper utilities unless explicitly requested; keep code simple and prefer existing functions from base R or the packages already in use.
+5. When proposing or generating shell commands, default to `PowerShell` syntax and conventions.
