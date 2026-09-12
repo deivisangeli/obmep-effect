@@ -17,7 +17,8 @@
 ###
 ### Saida:
 ###   obmep_candidates_selected.parquet   uma linha por usuario
-###                                       SELECIONADO, 47 colunas
+###                                       SELECIONADO, 48 colunas
+###   ranked_university_work_any e a uniao explicita de rf_any/sw_any.
 ###
 ### Depends on:
 ###   shanghai_top1000_degree_flags.R        (sh_, 16)
@@ -78,45 +79,36 @@
 ###    Trate-a como tal.
 ###
 ### -----------------------------------------------------------------
-### MEASURED, run of 2026-08-29
+### MEASURED, RCID employer rebuild of 2026-09-09
 ### -----------------------------------------------------------------
-###   entradas   sh_ 990,937   rd_ 583,570   firms 436,813
-###   SELECIONADOS            1,297,109   -- 18.94% da coorte
-###   com fullname            1,296,321   -- 99.94%
+###   entradas   sh_ 1,140,993   rd_ 701,930   firms 484,890
+###   SELECIONADOS              1,468,102   -- 21.43% da coorte
+###   com fullname              1,467,285   -- 99.94%
 ###
 ###   O VENN DOS TRES:
-###     so sh_                  418,557
-###     sh_ + rd_               334,981
-###     so firms                172,232
-###     sh_ + firms             122,750
-###     os tres                 114,649
-###     so rd_                  106,758
-###     rd_ + firms              27,182
+###     so sh_                  430,647
+###     sh_ + rd_               444,810
+###     so firms                198,271
+###     sh_ + firms             137,254
+###     os tres                 128,282
+###     so rd_                  107,755
+###     rd_ + firms              21,083
 ###
-###   estudou em alguma      1,124,877
-###   trabalhou em alguma      436,813
-###     sh_ 990,937  rd_ 583,570
-###     un_  28,735  tc_ 159,638  rf_ 142,151  sw_ 233,290
+###   estudou em alguma      1,269,831
+###   trabalhou em alguma      484,890
+###     sh_ 1,140,993  rd_ 701,930
+###     un_ 28,735  tc_ 159,638  rf_ 66,683  sw_ 296,596
+###     ranked_university_work_any 316,929
 ###
 ###   A COBERTURA DE NOME E DE 99,94%, e uniforme entre os tres
 ###   marcadores (99,94 / 99,90 / 99,94). A lacuna de versao entre o
 ###   snapshot de 2025-07 e a coorte de 2026-08 (nota 4) existe mas e
-###   de 788 pessoas, nao o buraco que se poderia temer. Cobertura
+###   de 817 pessoas, nao o buraco que se poderia temer. Cobertura
 ###   perto de zero significaria que os dois lados nao compartilham
 ###   espaco de user_id -- investigue, nao remende.
 ###
-###   CONFERIDO A MAO, e os tres passaram:
-###     - dos usuarios com diploma numa das 9 ausentes do top-1000,
-###       ZERO tem sh_any = 1: UTFPR 25,267, UFBA 20,468, UFU 18,114,
-###       UFABC 14,410, UEM 12,674, UFLA 9,059, FEI 7,727, Maua 5,263,
-###       ITA 1,250. E exatamente o caso que o estagio 20 existe para
-###       cobrir.
-###     - sw_ sem rf_ da UFF (801), UNESP (301), UFC (901), Unifesp
-###       (701) e Pelotas (901) -- brasileiras rankeadas fora do
-###       top-10 do RUF -- e depois Florida, Toronto, Buenos Aires,
-###       UT Austin, Berkeley, Stanford. Nenhum homonimo visivel.
-###     - doutores da USP/Unicamp em Creditas, QuintoAndar e Didi,
-###       com sh_phd_inst concordando com rd_phd_inst linha a linha.
+###   Os cinco produtos foram validados juntos e publicados por 19a;
+###   veja ranked_university_work_{rebuild,publication}_report.json.
 ###
 ####################################################################
 
@@ -142,20 +134,22 @@ gt_root    <- Sys.getenv("GT_ROOT",
 coh_dir   <- file.path(obmep_root, "Data/intermediate/revelio_br_cohort")
 sh_path   <- file.path(coh_dir, "obmep_candidates_step_1_shanghai.parquet")
 rd_path   <- file.path(coh_dir, "obmep_candidates_step_1_ruf_degree.parquet")
-fm_path   <- file.path(coh_dir, "obmep_candidates_step_1_firms.parquet")
+fm_path   <- Sys.getenv("OBMEP_SELECTED_FIRMS_PATH",
+                        unset = file.path(coh_dir, "obmep_candidates_step_1_firms.parquet"))
 cand_path <- file.path(coh_dir, "obmep_candidates_step_1.parquet")
 
 lk_dir    <- file.path(gt_root, "Data/intermediate/fuzzy_match/linkedin_names")
 
-out_path  <- file.path(coh_dir, "obmep_candidates_selected.parquet")
+out_path  <- Sys.getenv("OBMEP_SELECTED_OUT",
+                        unset = file.path(coh_dir, "obmep_candidates_selected.parquet"))
 
 mem_limit <- Sys.getenv("OBMEP_DUCKDB_MEM", unset = "12GB")
 
 # Medidos contra os tres produtos atuais. Divergencia aqui significa
 # que uma das entradas foi reconstruida -- warning, nao stop.
-exp_shanghai <- 990937L
-exp_ruf_deg  <- 583570L
-exp_firms    <- 436813L
+exp_shanghai <- 1140993L
+exp_ruf_deg  <- 701930L
+exp_firms    <- 484890L
 
 # Tamanho da coorte de origem. Deterministico: aborta em vez de avisar.
 exp_cohort <- 6849674L
@@ -249,7 +243,9 @@ dbExecute(con, sprintf("
          CAST(coalesce(f.rf_any, 0) AS INTEGER)            AS rf_any,
          f.rf_best_rank, f.rf_best_inst, f.rf_first_year,
          CAST(coalesce(f.sw_any, 0) AS INTEGER)            AS sw_any,
-         f.sw_best_rank, f.sw_best_inst, f.sw_first_year
+         f.sw_best_rank, f.sw_best_inst, f.sw_first_year,
+         CAST(coalesce(f.ranked_university_work_any, 0) AS INTEGER)
+                                                              AS ranked_university_work_any
   FROM            read_parquet('%s') s
   FULL OUTER JOIN read_parquet('%s') r ON s.user_id = r.user_id
   FULL OUTER JOIN read_parquet('%s') f
@@ -333,6 +329,9 @@ v <- dbGetQuery(con, "
          sum(CASE WHEN in_firms = 1 AND un_any = 0 AND tc_any = 0
                    AND rf_any = 0 AND sw_any = 0
                   THEN 1 ELSE 0 END)                       AS bad_fm,
+         sum(CASE WHEN ranked_university_work_any <>
+                            greatest(rf_any, sw_any)
+                  THEN 1 ELSE 0 END)                       AS bad_ranked_union,
          sum(CASE WHEN fullname IS NOT NULL THEN 1 ELSE 0 END) AS n_named
   FROM saida")
 print(as.data.frame(v[, c("n_rows", "n_uid", "uid_null", "bad_none",
@@ -355,6 +354,10 @@ if (v$bad_rd != 0) stop(v$bad_rd, " linhas com in_ruf_deg = 1 e rd_any <> 1.")
 if (v$bad_fm != 0) {
   stop(v$bad_fm, " linhas com in_firms = 1 e nenhum dos quatro bracos ",
        "de emprego ligado.")
+}
+if (v$bad_ranked_union != 0) {
+  stop(v$bad_ranked_union,
+       " rows disagree with ranked_university_work_any = rf_any OR sw_any.")
 }
 
 # Todo user_id da saida tem de estar na coorte.
@@ -385,6 +388,8 @@ chk("firms",      n_fm, exp_firms)
 ### Escrita e releitura
 ####################################################################
 
+if (file.exists(out_path)) stop("Output already exists: ", out_path)
+dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
 dbExecute(con, sprintf(
   "COPY (SELECT * FROM saida ORDER BY user_id) TO '%s'
    (FORMAT PARQUET, COMPRESSION ZSTD)", fw(out_path)))
@@ -402,8 +407,9 @@ stopifnot(identical(names(df), c(
   "un_any", "un_best_rank", "un_best_firm", "un_first_year",
   "tc_any", "tc_best_rank", "tc_best_firm", "tc_first_year",
   "rf_any", "rf_best_rank", "rf_best_inst", "rf_first_year",
-  "sw_any", "sw_best_rank", "sw_best_inst", "sw_first_year")))
-stopifnot(nrow(df) == v$n_rows, length(names(df)) == 47L)
+  "sw_any", "sw_best_rank", "sw_best_inst", "sw_first_year",
+  "ranked_university_work_any")))
+stopifnot(nrow(df) == v$n_rows, length(names(df)) == 48L)
 
 ####################################################################
 ### Relatorio

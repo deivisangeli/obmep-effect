@@ -1,6 +1,6 @@
 ####################################################################
 ### 27b. Placebo do pareamento CAPES x candidatos selecionados
-### Quanto dos 14,1% e coincidencia?
+### Quanto dos 14,3% e coincidencia?
 ###
 ### Pipeline local e OFFLINE. Le SO os tres produtos que o script 27
 ### ja gravou -- nao reescaneia a educacao nem o CSV da CAPES, nao usa
@@ -8,9 +8,9 @@
 ### relacao ao pipeline: nao altera nada, como o script 17.
 ###
 ### A PERGUNTA
-### O produto conservador do 27 pareia 79.764 das 567.270 pessoas da
-### CAPES (14,1%) e 84.299 dos 149.887 users que tem um diploma
-### brasileiro resolvivel (56,2%). A taxa NAO e plana -- e zero antes
+### O produto conservador do 27 pareia 81.157 das 567.270 pessoas da
+### CAPES (14,3%) e 85.896 dos 153.291 users selecionados com diploma
+### brasileiro resolvivel (56,0%). A taxa NAO e plana -- e zero antes
 ### de 2010, tem pico de ~17% em 2016-2019 e cai para 9,4% em 2024 --
 ### o que parece sinal e nao ruido. Mas ninguem MEDIU a taxa de falso
 ### positivo. Isto mede.
@@ -31,8 +31,8 @@
 ###     Isola a contribuicao do NOME. E o braco mais afiado.
 ###
 ### CAUTION / LIMITATIONS
-###   1. O BRACO K = 0 TEM de reproduzir o resultado real (87.110
-###      pares, 79.764 pessoas). Se nao reproduzir, a construcao da
+###   1. O BRACO K = 0 TEM de reproduzir o resultado real (88.772
+###      pares, 81.157 pessoas). Se nao reproduzir, a construcao da
 ###      chave aqui divergiu do script 27 e TODO o resto da rodada
 ###      perde sentido. Por isso aborta, nao avisa. E a checagem mais
 ###      importante do script.
@@ -44,10 +44,11 @@
 ###      ano. O braco B isola so o nome. NENHUM braco isola a
 ###      instituicao, e nenhum aqui consegue.
 ###   4. Placebo baixo LIMITA o falso positivo; nao prova que os
-###      sobreviventes estao certos. So o caderno de 100 linhas do
-###      script 27a fala disso, e ele ainda esta em branco. Os dois se
-###      complementam: o placebo mede quanto dos 14,1% e coincidencia,
-###      o caderno mede se o resto e mesmo a mesma pessoa.
+###      sobreviventes estao certos. So uma revisao como a do caderno
+###      de 100 linhas do script 27a fala disso; o caderno em branco da
+###      rodada anterior foi arquivado, nao redesenhado. Os dois tipos
+###      de evidencia se complementam: o placebo mede quanto dos 14,3%
+###      e coincidencia, e o caderno mede se o resto e a mesma pessoa.
 ###   5. Pessoas cujo primeiro nome e unico na CAPES nao podem ser
 ###      permutadas no braco B. Sao contadas e excluidas, e a taxa do
 ###      braco B e sobre a base permutavel.
@@ -67,6 +68,7 @@
 ###   prep/building_external_data/capes_obmep_candidates_name_match.R (27)
 ###
 ### Outputs (Data/intermediate/capes_discentes/capes_obmep_match/):
+###   capes_obmep_match_placebo_pairs.parquet  pares do braco B, j=1
 ###   capes_obmep_match_placebo.parquet
 ####################################################################
 
@@ -86,18 +88,40 @@ obmep_root <- Sys.getenv(
   "OBMEP_ROOT",
   unset = "C:/Users/megaj/Globtalent Dropbox/OBMEP"
 )
+match_cohort <- Sys.getenv("OBMEP_MATCH_COHORT", unset = "legacy")
+if (!match_cohort %in% c("legacy", "degree_duration")) {
+  stop("OBMEP_MATCH_COHORT = '", match_cohort,
+       "' does not exist. Use legacy or degree_duration.")
+}
+cohort_tag <- if (match_cohort == "degree_duration") "_degree_duration" else ""
 # A mesma chave do script 27: env OBMEP_MATCH_KEY_OA decide qual das
 # duas variantes e medida. O placebo le so o que aquele script gravou,
 # entao basta apontar para o diretorio certo.
 key_oa_ids <- Sys.getenv("OBMEP_MATCH_KEY_OA", unset = "1") != "0"
-variant_tag <- if (key_oa_ids) "" else "_noinst"
+
+# O BRACO, tambem igual ao do script 27 (nota 10 de la): "msc" e
+# "phd" medem os bracos por diploma, que sao onde a chave exige UM
+# diploma em vez dos dois. Mesma regra de sempre -- o que o placebo
+# mede e o diretorio para onde este env var aponta.
+match_arm <- Sys.getenv("OBMEP_MATCH_ARM", unset = "both")
+if (!match_arm %in% c("both", "msc", "phd")) {
+  stop("OBMEP_MATCH_ARM = '", match_arm, "' nao existe. ",
+       "Use both, msc ou phd.")
+}
+use_msc <- match_arm != "phd"
+use_phd <- match_arm != "msc"
+
+variant_tag <- paste0(
+  cohort_tag, if (key_oa_ids) "" else "_noinst",
+  switch(match_arm, both = "", msc = "_msc", phd = "_phd"))
 
 out_dir <- file.path(
   obmep_root, "Data/intermediate/capes_discentes",
   paste0("capes_obmep_match", variant_tag))
 
 canon_dir <- file.path(obmep_root,
-                       "Data/intermediate/capes_discentes/capes_obmep_match")
+                       "Data/intermediate/capes_discentes",
+                       paste0("capes_obmep_match", cohort_tag))
 
 keys_path <- file.path(out_dir, "capes_person_keys.parquet")
 vars_path <- file.path(out_dir, "capes_name_variants.parquet")
@@ -113,11 +137,22 @@ n_buckets <- 128L
 shifts <- c(-7L, -5L, -3L, 3L, 5L, 7L)
 perm_offsets <- 1:5
 
-# Medidos em 2026-09-06 sobre a rodada real do script 27.
-if (key_oa_ids) {
-  exp_real_pairs <- 87110L
-  exp_real_people <- 79764L
-  exp_real_users <- 84299L
+# Canonico medido em 2026-09-09; variante sem instituicao mantida como
+# diagnostico historico de 2026-09-06.
+if (match_cohort == "degree_duration" || match_arm != "both") {
+  # Bracos por diploma: em vez de tres constantes copiadas a mao, o
+  # alvo do braco de sanidade e lido do proprio produto do script 27.
+  # A nota 1 quer justamente isto -- que o K = 0 reproduza o que
+  # aquele script gravou -- e ler dali remove um modo de erro sem
+  # afrouxar nada. Medido em 2026-09-09: msc 106.320/96.292/99.360,
+  # phd 29.118/26.868/28.648.
+  exp_real_pairs <- NA_integer_
+  exp_real_people <- NA_integer_
+  exp_real_users <- NA_integer_
+} else if (key_oa_ids) {
+  exp_real_pairs <- 88772L
+  exp_real_people <- 81157L
+  exp_real_users <- 85896L
 } else {
   exp_real_pairs <- 282769L
   exp_real_people <- 164747L
@@ -152,6 +187,7 @@ qp <- function(path) {
 }
 
 cat("Placebo do pareamento CAPES x candidatos selecionados\n")
+cat("coorte  :", match_cohort, "\n")
 cat("entrada :", out_dir, "\n")
 cat("corte   : jw_combo >=", jw_cut, "E jw_lastname >=", jw_cut, "\n")
 cat("variante:", if (key_oa_ids) "canonica" else "SEM openalex_id", "\n")
@@ -184,17 +220,23 @@ cat("pessoas CAPES:", base_qa$capes_pessoas, " variantes:", base_qa$variantes,
 ### -- ver limitacao 2 do script 27.
 ####################################################################
 
+# O braco apaga as posicoes do OUTRO diploma, exactamente como o
+# script 27 faz. As 7 posicoes continuam de pe; o que muda e quais
+# delas carregam valor. A guarda de drift logo abaixo e o que
+# garante que esta copia nao divergiu daquela.
 key_tpl <- sprintf(paste0(
   "concat_ws('-',
      coalesce(first_name, 'NA'),
-     coalesce(CAST(%%s AS VARCHAR), 'NA'),
+     %s,
      'NA',
-     coalesce(CAST(%%s AS VARCHAR), 'NA'),
+     %s,
      'NA',
      %s,
      %s)"),
-  if (key_oa_ids) "coalesce(msc_oa_id, 'NA')" else "'NA'",
-  if (key_oa_ids) "coalesce(phd_oa_id, 'NA')" else "'NA'")
+  if (use_msc) "coalesce(CAST(%s AS VARCHAR), 'NA')" else "'NA'",
+  if (use_phd) "coalesce(CAST(%s AS VARCHAR), 'NA')" else "'NA'",
+  if (key_oa_ids && use_msc) "coalesce(msc_oa_id, 'NA')" else "'NA'",
+  if (key_oa_ids && use_phd) "coalesce(phd_oa_id, 'NA')" else "'NA'")
 
 ####################################################################
 ### Uma passada de pontuacao. cvar tem (person_key, key_string, csur,
@@ -227,12 +269,21 @@ score_one <- function(label, param) {
 ### Limitacao 1.
 ####################################################################
 
+# Uma posicao apagada pelo braco NAO tem %s para receber o ano, e
+# passar um argumento a mais para sprintf() e erro silencioso: ele
+# enfia o ano do mestrado na posicao do doutorado e a chave deixa de
+# ser a chave. Todo consumidor de key_tpl passa por aqui.
+key_filled <- function(k = 0L) {
+  yr <- function(lvl) {
+    if (k == 0L) paste0(lvl, "_start_year") else
+      sprintf("%s_start_year + %d", lvl, k)
+  }
+  args <- c(if (use_msc) yr("msc"), if (use_phd) yr("phd"))
+  do.call(sprintf, c(list(key_tpl), as.list(args)))
+}
+
 build_shift <- function(k) {
-  ke <- sprintf(key_tpl,
-                if (k == 0L) "msc_start_year" else
-                  sprintf("msc_start_year + %d", k),
-                if (k == 0L) "phd_start_year" else
-                  sprintf("phd_start_year + %d", k))
+  ke <- key_filled(k)
   invisible(dbExecute(con, sprintf(
     "CREATE OR REPLACE TABLE cvar AS
      SELECT k.person_key, k.key_new AS key_string, v.csur, v.n_parts, v.n_sur
@@ -259,6 +310,23 @@ bucket_bad <- dbGetQuery(con, sprintf(
 stopifnot(bucket_bad == 0L)
 
 real <- score_one("real", "K = 0")
+if (match_cohort == "degree_duration" || match_arm != "both") {
+  # Le do produto do script 27 o que o K = 0 tem de reproduzir.
+  cand_file <- file.path(out_dir, "capes_obmep_match_candidates.parquet")
+  stopifnot(file.exists(cand_file))
+  tgt <- dbGetQuery(con, sprintf(
+    "SELECT count(*) AS pares,
+            count(DISTINCT person_key) AS pessoas,
+            count(DISTINCT user_id) AS users
+     FROM read_parquet(%1$s)
+     WHERE jw_combo >= %2$.17g AND jw_lastname >= %2$.17g",
+    qp(cand_file), jw_cut))
+  exp_real_pairs <- tgt$pares
+  exp_real_people <- tgt$pessoas
+  exp_real_users <- tgt$users
+  cat("alvo lido do script 27:", exp_real_pairs, "/", exp_real_people,
+      "/", exp_real_users, "\n")
+}
 cat("pares:", real$pares, " pessoas:", real$pessoas, " users:", real$users,
     "\n")
 if (real$pares != exp_real_pairs || real$pessoas != exp_real_people ||
@@ -326,7 +394,7 @@ build_perm <- function(j) {
      JOIN (SELECT person_key, %s AS key_new FROM ck) k
        ON k.person_key = p.person_key
      JOIN cvraw v ON v.person_key = p.donor_key",
-    sprintf(key_tpl, "msc_start_year", "phd_start_year"))))
+    key_filled())))
 }
 
 build_perm(perm_offsets[1])
@@ -371,6 +439,45 @@ real_perm <- dbGetQuery(con, sprintf("
   SELECT count(DISTINCT person_key) AS n FROM (
     SELECT person_key FROM perm) p
   WHERE EXISTS (SELECT 1 FROM ck k WHERE k.person_key = p.person_key)"))$n
+
+####################################################################
+### O CONJUNTO de pares do braco B, nao so a contagem
+###
+### Somar os placebos de dois bracos nao da o placebo da uniao: uma
+### pessoa pode sobreviver nos dois e seria contada duas vezes. Quem
+### une os bracos (script 27c) precisa dos PARES para deduplicar do
+### mesmo jeito que deduplica os reais. Sai daqui em vez de o 27c
+### remontar a chave, que seria a terceira copia dela.
+###
+### O laco dos deslocamentos deixou `res` no ULTIMO deslocamento,
+### entao o deslocamento 1 -- a manchete -- e remontado. Que a
+### remontagem reproduz a manchete e afirmado.
+####################################################################
+
+build_perm(perm_offsets[1])
+invisible(score_one("B_sobrenome_permutado", "rotacao j=1 (reposto)"))
+
+pairs_path <- file.path(out_dir, "capes_obmep_match_placebo_pairs.parquet")
+pairs_part <- paste0(pairs_path, ".part")
+if (file.exists(pairs_part)) unlink(pairs_part)
+invisible(dbExecute(con, sprintf(
+  "COPY (SELECT person_key, CAST(user_id AS VARCHAR) AS user_id
+         FROM res
+         WHERE jw_combo >= %1$.17g AND jw_lastname >= %1$.17g
+         ORDER BY person_key, user_id)
+   TO %2$s (FORMAT PARQUET, COMPRESSION ZSTD)", jw_cut, qp(pairs_part))))
+
+pairs_n <- dbGetQuery(con, sprintf(
+  "SELECT count(*) AS n FROM read_parquet(%s)", qp(pairs_part)))$n
+if (pairs_n != arm_b$pares) {
+  stop("A remontagem do deslocamento 1 deu ", pairs_n, " pares e a ",
+       "manchete foi ", arm_b$pares, ". O braco B nao e reprodutivel.")
+}
+if (file.exists(pairs_path)) unlink(pairs_path)
+if (!file.rename(pairs_part, pairs_path)) {
+  stop("Nao foi possivel promover: ", pairs_path)
+}
+cat("pares do braco B (j=1) gravados:", pairs_n, "\n")
 
 ####################################################################
 ### O produto largo CONTEM o canonico
@@ -477,7 +584,7 @@ cat("\nCada K sai em linha propria de proposito: deslocar o ano tambem\n")
 cat("muda o tamanho do bloco, entao a media do braco A e indicativa e\n")
 cat("nao um estimador -- nota 2.\n")
 cat("\nO braco B e o mais afiado: a chave fica identica e so o\n")
-cat("sobrenome muda de dono. Se ele se aproximasse do real, os 14,1%\n")
+cat("sobrenome muda de dono. Se ele se aproximasse do real, os 14,3%\n")
 cat("seriam artefato do bloco e nao do nome.\n")
 cat("\n=========== EXCEDENTE SOBRE O PLACEBO ===========\n")
 cat("(o que sobra depois de descontar a coincidencia -- e este o\n")
@@ -495,7 +602,8 @@ cat("legitima: uma diferenca menor que ela nao seria distinguivel do\n")
 cat("ruido do proprio estimador.\n")
 
 cat("\nPlacebo baixo LIMITA o falso positivo; nao prova que os\n")
-cat("sobreviventes estao certos -- nota 4. Para isso, o caderno do 27a.\n")
+cat("sobreviventes estao certos -- nota 4. Para isso, e preciso uma\n")
+cat("revisao manual como o caderno do 27a.\n")
 cat("\nO excedente e ESTIMADOR DE PRIMEIRA ORDEM, nao identidade:\n")
 cat("supoe que o processo de falso positivo tem a mesma magnitude na\n")
 cat("rodada real e na permutada. O braco B segura os blocos e a\n")

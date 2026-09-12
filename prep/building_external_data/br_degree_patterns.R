@@ -301,3 +301,30 @@ sql_shanghai_level <- sprintf(
    END",
   rx_notdeg, rx_phd, rx_lato, rx_msc, rx_notdeg_weak,
   rx_post16, rx_bach16, sql_is_bachelor, rx_bach16)
+
+# The current RUF/Shanghai production pipelines apply one additional
+# whole-row veto before the shared level cascade: raw secondary-school and
+# technical descriptions always remain `other`, even when Revelio's coarse
+# `degree` label says Bachelor. Keep the wrapped expression named here so a
+# cohort that adopts the ranked-degree definition does not have to restate or
+# subtly drift from the production flags.
+sql_ranked_level <- sprintf(
+  "CASE WHEN regexp_like(dr, '%s') THEN 'other' ELSE (%s) END",
+  rx_hs, sql_shanghai_level)
+
+sql_is_ranked_bachelor <- sprintf("(%s) = 'bachelor'", sql_ranked_level)
+
+# Duration may recover only the final, genuinely unclassified `other` arm.
+# Revelio has seven observed normalized degree labels; requiring `empty`
+# prevents a 3--6 year Associate, High School, Master, MBA or Doctor record
+# from being promoted. The regex guards do the same for informative raw text.
+rx_explicit_non_bachelor <- paste0(
+  "(?:", rx_notdeg, ")|(?:", rx_notdeg_weak, ")|(?:", rx_post, ")|(?:",
+  rx_post16, ")|(?:", rx_tech, ")|(?:", rx_hs, ")|",
+  "post[ -]?grad|t[e\u00e9]cnic")
+
+sql_is_residual_other <- sprintf(
+  "coalesce(degree, 'empty') = 'empty'
+   AND (%s) = 'other'
+   AND NOT regexp_like(dr, '%s')",
+  sql_ranked_level, rx_explicit_non_bachelor)

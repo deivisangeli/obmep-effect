@@ -10,7 +10,7 @@
 ### usuarios selecionados, toda posicao que ele tem, com a
 ### classificacao de papel e o local que a Revelio atribui a ela:
 ###
-###   obmep_candidates_selected            1,297,109 usuarios
+###   obmep_candidates_selected            1,468,102 usuarios
 ###       + obmep_candidates_step_1_position_role_loc   (10c)
 ###       -> obmep_candidates_selected_positions.parquet
 ###          (position_id, user_id, job_category,
@@ -76,14 +76,14 @@
 ###    fazem isso: usam NULL de verdade. Veja a nota 9 do 10c.
 ###
 ### -----------------------------------------------------------------
-### MEASURED, run of 2026-08-31
+### MEASURED, RCID employer rebuild of 2026-09-09
 ### -----------------------------------------------------------------
-###   linhas (posicoes)           7,285,037
-###   usuarios distintos          1,297,109  == toda a selecao (nota 2)
-###   posicoes por usuario        5.62   (a coorte inteira faz 4.44:
+###   linhas (posicoes)           8,219,165
+###   usuarios distintos          1,468,102  == toda a selecao (nota 2)
+###   posicoes por usuario        5.60   (a coorte inteira faz 4.44:
 ###                               os selecionados tem carreira mais
 ###                               longa, nao e ruido)
-###   em disco                    167.9 MB, parquet ZSTD
+###   em disco                    189.9 MB, parquet ZSTD
 ###
 ###   job_category                100%, 7 distintos. Os sete:
 ###                               Admin 24.7%, Engineer 22.0%,
@@ -125,15 +125,17 @@ obmep_root <- Sys.getenv("OBMEP_ROOT",
                          unset = "C:/Users/megaj/Globtalent Dropbox/OBMEP")
 
 coh_dir  <- file.path(obmep_root, "Data/intermediate/revelio_br_cohort")
-sel_path <- file.path(coh_dir, "obmep_candidates_selected.parquet")
+sel_path <- Sys.getenv("OBMEP_SELECTED_PATH",
+                       unset = file.path(coh_dir, "obmep_candidates_selected.parquet"))
 rl_dir   <- file.path(coh_dir, "obmep_candidates_step_1_position_role_loc")
 
-out_path <- file.path(coh_dir, "obmep_candidates_selected_positions.parquet")
+out_path <- Sys.getenv("OBMEP_SELECTED_POSITIONS_OUT",
+                       unset = file.path(coh_dir, "obmep_candidates_selected_positions.parquet"))
 
 mem_limit <- Sys.getenv("OBMEP_DUCKDB_MEM", unset = "12GB")
 
 # Deterministico: aborta em vez de avisar (nota 2).
-exp_selected <- 1297109L
+exp_selected <- as.numeric(Sys.getenv("OBMEP_EXPECTED_SELECTED", unset = "1468102"))
 
 # Medido na rodada do 10c. Divergencia significa que o extrato foi
 # reconstruido -- warning, nao stop.
@@ -190,7 +192,7 @@ n_sel <- dbGetQuery(con, sprintf(
   fw(sel_path)))
 cat("usuarios selecionados :", format(n_sel$n, big.mark = ","), "\n")
 if (n_sel$n != n_sel$d) stop("user_id duplicado em ", basename(sel_path), ".")
-if (n_sel$n != exp_selected) {
+if (exp_selected > 0 && n_sel$n != exp_selected) {
   stop("A selecao tem ", format(n_sel$n, big.mark = ","), " usuarios, nao ",
        format(exp_selected, big.mark = ","),
        ". O script 21 foi reconstruido: confira antes de seguir.")
@@ -253,9 +255,9 @@ if (v$n_pid != v$n_rows) {
 }
 
 # Nota 2, a assercao que sustenta o script.
-if (v$n_uid != exp_selected) {
+if (v$n_uid != n_sel$n) {
   stop(format(v$n_uid, big.mark = ","), " usuarios distintos na saida, ",
-       "esperado ", format(exp_selected, big.mark = ","),
+       "esperado ", format(n_sel$n, big.mark = ","),
        ". Todo selecionado e membro da coorte step_1 e o criterio D nao ",
        "admite ninguem sem posicao, entao faltar usuario significa que o ",
        "join pegou a coluna errada.")
@@ -278,6 +280,8 @@ cat("[OK] nenhuma linha fora da selecao\n")
 ### C -- escrita e releitura
 ####################################################################
 
+if (file.exists(out_path)) stop("Output already exists: ", out_path)
+dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
 invisible(dbExecute(con, sprintf(
   "COPY (SELECT * FROM saida ORDER BY user_id, position_id) TO '%s'
    (FORMAT PARQUET, COMPRESSION ZSTD)", fw(out_path))))

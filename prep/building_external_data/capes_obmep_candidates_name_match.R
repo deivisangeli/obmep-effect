@@ -26,7 +26,8 @@
 ###   5. A comparacao TIRA O PRIMEIRO NOME DOS DOIS LADOS. O bloco ja
 ###      exigiu que ele fosse identico, entao pontua-lo de novo mede
 ###      uma constante -- e o bonus de prefixo do Winkler premia
-###      exatamente essa constante. Medido: 84.722 pares passavam de
+###      exatamente essa constante. Medido na selecao de 2026-09-09:
+###      86.018 pares passavam de
 ###      0,90 no nome inteiro e reprovavam em qualquer comparacao de
 ###      sobrenome; numa amostra aleatoria de 30, os 30 eram pessoas
 ###      diferentes ("MELISSA PEREIRA DOS SANTOS" x "Melissa Lima",
@@ -71,9 +72,9 @@
 ###      Henrique", "Joao Pedro" e "Ana Clara" o SEGUNDO token ainda
 ###      e um nome de batismo ocupando a posicao de sobrenome -- e ele
 ###      concorda por razoes que nada tem a ver com identidade.
-###      jw_lastname existe para expor isso: dos 92.370 pares com
-###      jw_combo >= 0,90, os 86.995 em que o ULTIMO sobrenome tambem
-###      concorda sao o produto conservador, e os 5.375 restantes sao
+###      jw_lastname existe para expor isso: dos 94.315 pares com
+###      jw_combo >= 0,90, os 88.772 em que o ULTIMO sobrenome tambem
+###      concorda sao o produto conservador, e os 5.543 restantes sao
 ###      um balde de JULGAMENTO -- numa amostra de 15, cerca de um
 ###      terco eram verdadeiros (nome de casada, "Jr.", ", PhD") e o
 ###      resto eram "ANA CAROLINA GUSMAO MARCAL" x "Ana Carolina
@@ -82,7 +83,9 @@
 ###      as posicoes 6 e 7 -- os openalex_id -- entram na chave.
 ###      Ligado (padrao) escreve em capes_obmep_match/; desligado
 ###      escreve em capes_obmep_match_noinst/ e NUNCA toca no
-###      canonico (ha guarda no topo e no fim). A variante desligada
+###      canonico (ha guarda no topo e no fim). A comparacao abaixo e
+###      HISTORICA: as duas variantes foram medidas sobre a selecao de
+###      2026-09-06. A variante desligada
 ###      alcanca 451.331 pessoas da CAPES em vez de 166.086 e pareia
 ###      164.747 em vez de 79.764 -- e o PLACEBO dela sobe de 4,15%
 ###      para 57,6%. Mais da metade dos pares sobrevive quando se da a
@@ -97,6 +100,29 @@
 ###      regra antiga (nome inteiro) para a mudanca continuar
 ###      mensuravel. O portao de escrita e a UNIAO de jw_combo e
 ###      jw_name, entao nenhuma das regras perde recall no arquivo.
+###
+###  10. TRES BRACOS POR DIPLOMA. match_arm (env OBMEP_MATCH_ARM)
+###      escolhe quais posicoes da chave valem. "both" (padrao) e a
+###      chave canonica, que exige os DOIS diplomas de quem tem os
+###      dois: se o LinkedIn lista so um, ou lista o outro com ano
+###      ou instituicao diferente, o par cai em outro bucket para
+###      sempre. "msc" apaga as posicoes do doutorado e "phd" as do
+###      mestrado, entao cada braco pede que UM diploma concorde.
+###
+###      Diferente da nota 9, o braco NAO tira a instituicao da
+###      chave -- ele mantem um openalex_id, que e o que o placebo
+###      mostrou ser o que identifica esta ligacao. E cada braco
+###      EXIGE o seu diploma nos dois lados, senao um doutor-so
+###      entraria no braco de mestrado com a chave toda em NA e o
+###      bloco saturaria como em maria-2023-NA.
+###
+###      Os bracos escrevem em capes_obmep_match_msc/ e
+###      capes_obmep_match_phd/ e NUNCA tocam no canonico (mesma
+###      guarda da nota 9, agora sob is_variant). Cada braco e um
+###      SUPERCONJUNTO do canonico no seu diploma, o que e
+###      afirmado, nao deduzido -- ver arm_superset abaixo. A uniao
+###      deduplicada dos dois sai no script 27c, e como sempre o
+###      placebo do 27b e que diz se o ganho vale algo.
 ###
 ### Depends on:
 ###   prep/building_external_data/br_degree_patterns.R              (7)
@@ -137,6 +163,16 @@ obmep_root <- Sys.getenv(
 
 capes_dir <- file.path(obmep_root, "Data/intermediate/capes_discentes")
 rev_dir <- file.path(obmep_root, "Data/intermediate/revelio_br_cohort")
+
+# Population routing is deliberately an enum rather than independent path
+# overrides: the selected-profile file and education history must always come
+# from the same cohort. The legacy behavior remains the default.
+match_cohort <- Sys.getenv("OBMEP_MATCH_COHORT", unset = "legacy")
+if (!match_cohort %in% c("legacy", "degree_duration")) {
+  stop("OBMEP_MATCH_COHORT = '", match_cohort,
+       "' does not exist. Use legacy or degree_duration.")
+}
+cohort_tag <- if (match_cohort == "degree_duration") "_degree_duration" else ""
 # A VARIANTE. Ligado (padrao) = a chave de 7 posicoes descrita acima.
 # Desligado = as posicoes 6 e 7, os openalex_id, viram o literal 'NA'
 # nos dois lados, exatamente como key_end_years ja faz com as posicoes
@@ -144,7 +180,24 @@ rev_dir <- file.path(obmep_root, "Data/intermediate/revelio_br_cohort")
 #
 # NAO e um sucessor do produto canonico: e uma MEDICAO. Ver nota 9.
 key_oa_ids <- Sys.getenv("OBMEP_MATCH_KEY_OA", unset = "1") != "0"
-variant_tag <- if (key_oa_ids) "" else "_noinst"
+
+# O BRACO. "both" (padrao) = a chave canonica, em que quem tem os dois
+# diplomas precisa que os DOIS concordem. "msc" apaga as posicoes do
+# doutorado e "phd" as do mestrado, do mesmo jeito que key_end_years ja
+# apaga as posicoes 3 e 5 -- a chave continua com 7 posicoes.
+#
+# Cada braco EXIGE o seu proprio diploma nos dois lados. Sem isso um
+# doutor-so entraria no braco de mestrado como a chave
+# 'maria-NA-NA-NA-NA-NA-NA' e o bloco saturaria, que e exactamente o
+# que inutilizou a variante sem instituicao. Ver nota 10.
+match_arm <- Sys.getenv("OBMEP_MATCH_ARM", unset = "both")
+if (!match_arm %in% c("both", "msc", "phd")) {
+  stop("OBMEP_MATCH_ARM = '", match_arm, "' nao existe. ",
+       "Use both, msc ou phd.")
+}
+arm_tag <- switch(match_arm, both = "", msc = "_msc", phd = "_phd")
+
+variant_tag <- paste0(cohort_tag, if (key_oa_ids) "" else "_noinst", arm_tag)
 
 out_dir <- file.path(capes_dir, paste0("capes_obmep_match", variant_tag))
 
@@ -156,8 +209,14 @@ manual_path <- file.path(
   capes_dir,
   "capes_openalex_manual/capes_openalex_manual_br_crosswalk.parquet"
 )
-edu_dir <- file.path(rev_dir, "obmep_candidates_step_1_education")
-sel_path <- file.path(rev_dir, "obmep_candidates_selected.parquet")
+edu_dir <- file.path(
+  rev_dir, if (match_cohort == "degree_duration")
+    "obmep_candidates_step_1_degree_duration_education" else
+    "obmep_candidates_step_1_education")
+sel_path <- file.path(
+  rev_dir, if (match_cohort == "degree_duration")
+    "obmep_candidates_selected_degree_duration.parquet" else
+    "obmep_candidates_selected.parquet")
 map_path <- file.path(rev_dir, "rsid_openalex_safe_map.parquet")
 
 script_arg <- grep("^--file=", commandArgs(), value = TRUE)
@@ -187,18 +246,29 @@ key_end_years <- FALSE
 
 mem_limit <- if (key_oa_ids) "12GB" else "16GB"
 tmp_dir <- file.path(Sys.getenv("TEMP"), "duckdb_tmp_capes_obmep")
-cache_dir <- file.path(tmp_dir, "v1_b128")
+# O tag de versao carrega a variante E o braco: sem isso uma rodada do
+# braco phd releria em silencio os parquet de bucket do braco msc.
+cache_dir <- file.path(tmp_dir, paste0("v1_b128", variant_tag))
 
-# Valores medidos em 2026-09-06. Servem como teste de regressao:
+# Valores medidos na rodada canonica de 2026-09-09. Servem como teste
+# de regressao; os valores da variante sem instituicao continuam sendo
+# os historicos de 2026-09-06.
 # divergencia estrutural aborta, divergencia de contagem avisa.
 exp_capes_rows <- 733879L
 exp_capes_institutions <- 915L
 exp_capes_inst_with_oa <- 843L
 exp_capes_rows_with_oa <- 730667L
-exp_edu_rows <- 15712737L
-exp_edu_users <- 6849674L
-exp_selected_users <- 1297109L
-exp_selected_named <- 1296321L
+if (match_cohort == "degree_duration") {
+  exp_edu_rows <- 19710307L
+  exp_edu_users <- 8901904L
+  exp_selected_users <- 2289937L
+  exp_selected_named <- 2288180L
+} else {
+  exp_edu_rows <- 15712737L
+  exp_edu_users <- 6849674L
+  exp_selected_users <- 1468102L
+  exp_selected_named <- 1467285L
+}
 exp_safe_map_rows <- 667L
 # O power set roda sobre TODAS as grafias do nome de cada pessoa, nao
 # so a canonica: as 2.228 pessoas com mais de uma grafia rendem 15.415
@@ -207,19 +277,41 @@ exp_safe_map_rows <- 667L
 # exatamente o tipo de coisa que o LinkedIn pode ter copiado.
 exp_variants <- 2755694L
 exp_max_tokens <- 8L
-exp_users_no_surname <- 29615L
+exp_users_no_surname <- if (match_cohort == "degree_duration") {
+  44778L
+} else 33806L
 
 # As tres regras no corte 0,90. jw_name nao reproduz exatamente os
 # 172.269 do piloto anterior porque a variante "nome inteiro" agora e
 # a juncao dos TOKENS, sem as particulas; a diferenca e de 279 pares.
-if (key_oa_ids) {
-  exp_pairs_compared <- 719911L
-  exp_combo_pairs <- 92432L
-  exp_combo_persons <- 82946L
-  exp_strict_pairs <- 87110L
-  exp_legacy_pairs <- 171990L
+if (match_cohort == "degree_duration") {
+  exp_pairs_compared <- switch(
+    match_arm, both = 975226L, msc = 1131720L, phd = 169797L)
+  exp_combo_pairs <- switch(
+    match_arm, both = 143411L, msc = 171901L, phd = 43956L)
+  exp_combo_persons <- switch(
+    match_arm, both = 128112L, msc = 151365L, phd = 39915L)
+  exp_strict_pairs <- switch(
+    match_arm, both = 135777L, msc = 161823L, phd = 41873L)
+  exp_legacy_pairs <- switch(
+    match_arm, both = 251319L, msc = 304210L, phd = 59725L)
+} else if (match_arm != "both") {
+  # Primeira rodada dos bracos por diploma: nao ha valor medido ainda.
+  # NA cala o comparador de CONTAGEM sem desligar nenhuma guarda
+  # estrutural. Preencher com o que a rodada imprimir.
+  exp_pairs_compared <- NA_integer_
+  exp_combo_pairs <- NA_integer_
+  exp_combo_persons <- NA_integer_
+  exp_strict_pairs <- NA_integer_
+  exp_legacy_pairs <- NA_integer_
+} else if (key_oa_ids) {
+  exp_pairs_compared <- 769710L
+  exp_combo_pairs <- 94315L
+  exp_combo_persons <- 84373L
+  exp_strict_pairs <- 88772L
+  exp_legacy_pairs <- 179627L
 } else {
-  # Medidos em 2026-09-06 sobre a variante sem instituicao.
+  # Historicos: medidos em 2026-09-06 sobre a variante sem instituicao.
   exp_pairs_compared <- 51645722L
   exp_combo_pairs <- 455265L
   exp_combo_persons <- 179685L
@@ -236,6 +328,12 @@ expected_edu_columns <- c(
   "degree", "field_raw", "field", "university_country", "description",
   "startdate", "enddate"
 )
+if (match_cohort == "degree_duration") {
+  expected_edu_columns <- c(
+    expected_edu_columns, "ranked_level", "degree_duration_years",
+    "degree_residual_other", "degree_match_ranked", "degree_match_duration",
+    "degree_matches_laxed", "degree_match_route")
+}
 
 if (key_end_years) {
   stop("key_end_years = TRUE exige um ano de conclusao da CAPES, que o ",
@@ -258,12 +356,21 @@ dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
 # Guarda do padrao 21alt: uma rodada da variante nao pode, por
 # nenhum caminho, escrever no produto canonico. Tamanho e mtime do
 # arquivo canonico sao capturados aqui e reconferidos no fim.
-canon_dir <- file.path(capes_dir, "capes_obmep_match")
+canon_dir <- file.path(capes_dir, paste0("capes_obmep_match", cohort_tag))
 canon_file <- file.path(canon_dir, "capes_obmep_match_candidates.parquet")
-canon_before <- if (!key_oa_ids && file.exists(canon_file)) {
-  file.info(canon_file)[c("size", "mtime")]
+# Qualquer rodada que NAO seja a canonica e uma variante, e nenhuma
+# variante pode escrever no produto canonico por nenhum caminho.
+is_variant <- !key_oa_ids || match_arm != "both"
+legacy_canon_file <- file.path(
+  capes_dir, "capes_obmep_match", "capes_obmep_match_candidates.parquet")
+guarded_files <- unique(c(
+  if (match_cohort == "degree_duration") legacy_canon_file else character(),
+  if (is_variant) canon_file else character()))
+guarded_files <- guarded_files[file.exists(guarded_files)]
+guarded_before <- if (length(guarded_files)) {
+  file.info(guarded_files)[c("size", "mtime")]
 } else NULL
-if (!key_oa_ids && normalizePath(out_dir, mustWork = FALSE) ==
+if (is_variant && normalizePath(out_dir, mustWork = FALSE) ==
     normalizePath(canon_dir, mustWork = FALSE)) {
   stop("A variante resolveu para o diretorio canonico. Abortando.")
 }
@@ -303,6 +410,7 @@ sel_sql <- qp(sel_path)
 map_sql <- qp(map_path)
 
 cat("CAPES -> candidatos OBMEP selecionados: piloto de pareamento\n")
+cat("coorte      :", match_cohort, "\n")
 cat("CAPES       :", capes_path, "\n")
 cat("educacao    :", edu_dir, "\n")
 cat("selecionados:", sel_path, "\n")
@@ -640,7 +748,7 @@ stopifnot(identical(edu_columns, expected_edu_columns))
 
 # name_sur e o nome do LinkedIn SEM o primeiro token -- o outro lado
 # da comparacao. name_last e o ultimo token, que alimenta jw_lastname.
-# Os dois ficam NULL quando so ha um token utilizavel: 29.615 usuarios
+# Os dois ficam NULL quando so ha um token utilizavel: 33.806 usuarios
 # (2,3%) nao tem sobrenome nenhum e por isso nao podem ser pontuados
 # por jw_combo. Eles NAO sao removidos -- continuam elegiveis por
 # jw_name, e o portao de escrita e a uniao das duas regras.
@@ -666,11 +774,12 @@ stopifnot(sel_qa$users == sel_qa$ids)
 if (sel_qa$users != exp_selected_users) {
   warning("Selecionados ", sel_qa$users, " != ", exp_selected_users, " medido.")
 }
-if (sel_qa$named != exp_selected_named) {
+if (!is.na(exp_selected_named) && sel_qa$named != exp_selected_named) {
   warning("Selecionados com nome ", sel_qa$named, " != ",
           exp_selected_named, " medido.")
 }
-if (sel_qa$no_surname != exp_users_no_surname) {
+if (!is.na(exp_users_no_surname) &&
+    sel_qa$no_surname != exp_users_no_surname) {
   warning("Usuarios sem sobrenome ", sel_qa$no_surname, " != ",
           exp_users_no_surname, " medido.")
 }
@@ -758,27 +867,53 @@ invisible(dbExecute(con, "
 ### a esquerda. Ver limitacao 1.
 ####################################################################
 
-slot_msc_end <- if (key_end_years) {
+# O braco apaga as posicoes do OUTRO diploma. As 7 posicoes ficam de
+# pe: o assert de contagem de posicao nao muda e a chave do 27b
+# continua tendo a mesma forma.
+use_msc <- match_arm != "phd"
+use_phd <- match_arm != "msc"
+
+slot_msc_start <- if (use_msc) {
+  "coalesce(CAST(msc_start_year AS VARCHAR), 'NA')"
+} else "'NA'"
+slot_phd_start <- if (use_phd) {
+  "coalesce(CAST(phd_start_year AS VARCHAR), 'NA')"
+} else "'NA'"
+slot_msc_end <- if (key_end_years && use_msc) {
   "coalesce(CAST(msc_end_year AS VARCHAR), 'NA')"
 } else "'NA'"
-slot_phd_end <- if (key_end_years) {
+slot_phd_end <- if (key_end_years && use_phd) {
   "coalesce(CAST(phd_end_year AS VARCHAR), 'NA')"
 } else "'NA'"
 
-slot_msc_oa <- if (key_oa_ids) "coalesce(msc_oa_id, 'NA')" else "'NA'"
-slot_phd_oa <- if (key_oa_ids) "coalesce(phd_oa_id, 'NA')" else "'NA'"
+slot_msc_oa <- if (key_oa_ids && use_msc) {
+  "coalesce(msc_oa_id, 'NA')"
+} else "'NA'"
+slot_phd_oa <- if (key_oa_ids && use_phd) {
+  "coalesce(phd_oa_id, 'NA')"
+} else "'NA'"
 
 key_expr <- sprintf(
   "concat_ws('-',
      coalesce(first_name, 'NA'),
-     coalesce(CAST(msc_start_year AS VARCHAR), 'NA'),
      %s,
-     coalesce(CAST(phd_start_year AS VARCHAR), 'NA'),
+     %s,
+     %s,
      %s,
      %s,
      %s)",
-  slot_msc_end, slot_phd_end, slot_msc_oa, slot_phd_oa
+  slot_msc_start, slot_msc_end, slot_phd_start, slot_phd_end,
+  slot_msc_oa, slot_phd_oa
 )
+
+# A trava do braco, nos DOIS lados. O openalex_id so entra na
+# exigencia quando ele esta na chave -- exigi-lo fora dela produziria
+# um recorte incoerente com a propria chave.
+arm_where <- if (match_arm == "both") "" else {
+  paste0(" AND ", match_arm, "_start_year IS NOT NULL",
+         if (key_oa_ids) paste0(" AND ", match_arm, "_oa_id IS NOT NULL")
+         else "")
+}
 bucket_expr <- sprintf("CAST(hash(%s) %% %d AS INTEGER)", key_expr, n_buckets)
 
 invisible(dbExecute(con, sprintf(
@@ -787,8 +922,8 @@ invisible(dbExecute(con, sprintf(
           msc_start_year, msc_oa_id, phd_start_year, phd_oa_id,
           %s AS key_string, %s AS bucket
    FROM capes_person
-   WHERE first_name IS NOT NULL AND first_name <> ''",
-  key_expr, bucket_expr
+   WHERE first_name IS NOT NULL AND first_name <> ''%s",
+  key_expr, bucket_expr, arm_where
 )))
 
 invisible(dbExecute(con, sprintf(
@@ -798,8 +933,8 @@ invisible(dbExecute(con, sprintf(
           phd_start_year, phd_end_year, phd_oa_id,
           %s AS key_string, %s AS bucket
    FROM rev_person
-   WHERE first_name IS NOT NULL AND first_name <> ''",
-  key_expr, bucket_expr
+   WHERE first_name IS NOT NULL AND first_name <> ''%s",
+  key_expr, bucket_expr, arm_where
 )))
 
 key_qa <- dbGetQuery(con, sprintf("
@@ -823,6 +958,28 @@ stopifnot(
   key_qa$capes_bad_slots == 0L, key_qa$rev_bad_slots == 0L,
   key_qa$capes_bad_bucket == 0L, key_qa$rev_bad_bucket == 0L
 )
+
+# A trava do braco tem de ter pegado: ninguem sem o diploma do braco
+# pode ter sobrado, de nenhum dos dois lados.
+if (match_arm != "both") {
+  gate_qa <- dbGetQuery(con, sprintf("
+    SELECT
+      (SELECT count_if(%1$s_start_year IS NULL) FROM capes_keys)
+        AS capes_sem_ano,
+      (SELECT count_if(%1$s_start_year IS NULL) FROM rev_keys)
+        AS rev_sem_ano,
+      (SELECT count_if(%1$s_oa_id IS NULL) FROM capes_keys)
+        AS capes_sem_id,
+      (SELECT count_if(%1$s_oa_id IS NULL) FROM rev_keys)
+        AS rev_sem_id", match_arm))
+  stopifnot(
+    gate_qa$capes_sem_ano == 0L, gate_qa$rev_sem_ano == 0L,
+    !key_oa_ids ||
+      (gate_qa$capes_sem_id == 0L && gate_qa$rev_sem_id == 0L)
+  )
+  cat(sprintf("braco %s: %d pessoas CAPES x %d users com o diploma\n",
+              match_arm, key_qa$capes_persons, key_qa$rev_users))
+}
 
 # O bucket tem de ser reprodutivel a partir da chave.
 rehash <- dbGetQuery(con, sprintf(
@@ -1047,6 +1204,36 @@ stopifnot(
   unm_qa$rows == unm_qa$persons, unm_qa$overlap == 0L
 )
 
+# Um braco so pode ADICIONAR pares: relaxar a chave nao tira nada de
+# ninguem, e os escores nao dependem da chave. Entao todo par
+# conservador do canonico cuja pessoa tem o diploma do braco resolvido
+# TEM de reaparecer aqui, com o mesmo escore. Isso e afirmado e nao
+# deduzido -- e o mesmo teste que o 27b faz contra a variante _noinst,
+# e e ele que pega um erro na edicao da chave.
+if (match_arm != "both" && key_oa_ids && file.exists(canon_file)) {
+  arm_superset <- dbGetQuery(con, sprintf("
+    SELECT count(*) AS faltando FROM (
+      SELECT person_key, CAST(user_id AS VARCHAR) AS user_id
+      FROM read_parquet(%1$s)
+      WHERE jw_combo >= %2$.17g AND jw_lastname >= %2$.17g
+        AND capes_%3$s_start_year IS NOT NULL
+        AND capes_%3$s_oa_id IS NOT NULL) c
+    LEFT JOIN (
+      SELECT person_key, CAST(user_id AS VARCHAR) AS user_id
+      FROM crosswalk
+      WHERE jw_combo >= %2$.17g AND jw_lastname >= %2$.17g) x
+      USING (person_key, user_id)
+    WHERE x.person_key IS NULL",
+    qp(canon_file), jw_cut, match_arm))$faltando
+  if (arm_superset != 0L) {
+    stop(arm_superset, " par(es) conservador(es) do canonico com ",
+         match_arm, " resolvido NAO estao neste braco. O braco tinha ",
+         "de ser um superconjunto -- a edicao da chave quebrou algo.")
+  }
+  cat("[OK] braco e superconjunto do canonico no diploma ",
+      match_arm, "\n", sep = "")
+}
+
 for (v in list(c("combo_pares", xw_qa$combo_pairs, exp_combo_pairs),
                c("combo_pessoas", xw_qa$combo_persons, exp_combo_persons),
                c("combo+ultimo_sobrenome", xw_qa$strict_pairs,
@@ -1151,7 +1338,7 @@ compared_qa <- dbGetQuery(con, "
   FROM (SELECT DISTINCT person_key, key_string FROM capes_var_keys) c
   JOIN rev_keys r ON c.key_string = r.key_string")
 compared <- compared_qa$pares
-if (compared != exp_pairs_compared) {
+if (!is.na(exp_pairs_compared) && compared != exp_pairs_compared) {
   warning("Pares comparados ", compared, " != ", exp_pairs_compared,
           " medido.")
 }
@@ -1317,13 +1504,13 @@ cat("\nSaidas:\n")
 for (p in c(out_path, unm_path, sum_path, keys_path, vars_path, revk_path)) {
   cat(sprintf("  %s  %.2f MB\n", p, file.size(p) / 1024^2))
 }
-if (!is.null(canon_before)) {
-  canon_after <- file.info(canon_file)[c("size", "mtime")]
-  if (!identical(canon_before, canon_after)) {
-    stop("O produto canonico mudou durante uma rodada da variante. ",
-         "Isso nunca deveria acontecer -- ver a guarda no topo.")
+if (!is.null(guarded_before)) {
+  guarded_after <- file.info(guarded_files)[c("size", "mtime")]
+  if (!identical(guarded_before, guarded_after)) {
+    stop("A protected canonical product changed during this run. ",
+         "This should never happen -- see the guard at the top.")
   }
-  cat("[OK] produto canonico intacto (tamanho e mtime conferidos)\n")
+  cat("[OK] protected canonical products intact (size and mtime checked)\n")
 }
 
 cat("\nTabela de CANDIDATOS, nao mapa 1:1. Trate n_users e n_persons\n")

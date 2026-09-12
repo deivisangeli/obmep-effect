@@ -549,8 +549,22 @@ anything looser.
 
 ## Flagging the firms and universities people worked for
 
+**Current method (2026-09-09).** University employer flags are keyed by Revelio
+RCID rather than by the position's typed company strings. The online resolver
+matches normalized source/unique-parent OpenAlex names and the supplied ranking
+full name to `academic_company_ref.company`, expands `rcid`, `child_rcid`, and
+`ultimate_parent_rcid`, and the offline build tests both identifier columns in the
+local position-RCID extract. `rf_any` and `sw_any` remain separate; their union is
+`ranked_university_work_any`. The previous name/acronym classifier below is now
+report-only historical comparison.
+
+The published rebuild measures 66,683 RUF workers, 296,596 Shanghai workers,
+316,929 in their union, 484,890 users in the complete employer product, 1,468,102
+selected users, and 8,219,165 selected positions.
+
 *Scripts: `obmep_candidates_step_1_position_rcid.R`, `linkedin_company_rcid.R`,
-`obmep_candidates_step_1_firms.R` — the second endpoint of the chain.*
+`ranked_university_company_rcid.R`, `obmep_candidates_step_1_firms.R` — the second
+endpoint of the chain.*
 
 The Shanghai stage asks where a cohort member **studied**. This one asks where they **worked**,
 against four lists: 341 Hurun tech unicorns, the 200 largest tech firms by market cap, the 23
@@ -559,10 +573,9 @@ universities of the Shanghai top-1000.
 
 The Shanghai list appears on both sides, which is where the four prefixes come from: `sh_` studied
 at a Shanghai top-1000 and `sw_` worked at one; `rd_` studied at a RUF top-10 and `rf_` worked at
-one. `rf_` and `sw_` are the same arm reading different institution tables — `classify()` takes them
-as arguments and returns neutral `m_rank` / `m_id` / `m_inst` columns, so the matcher never knows
-which list it served. `sw_` has no acronym arm, because the Shanghai source carries no abbreviation
-column to fold.
+one. Under the former method, `rf_` and `sw_` were the same name-classifier arm reading different
+institution tables. That classifier is now rebuilt only for the retained/gained/lost validation
+report; it contributes no published flag.
 
 The difference between the two questions is the join key. A degree has only a typed string to go on,
 so the Shanghai stage matches names and lives with what that costs. An employer has an identifier —
@@ -623,7 +636,7 @@ The way out that worked costs nothing. The cohort's own 30 million positions car
 data itself. Still exact equality on a URL. It recovered **13 of the 53**, worth 1,216 flagged
 users, and rejected the one URL that mapped to two firms rather than picking the commoner.
 
-### What it flags
+### What the former name-based method flagged
 
 | | users | |
 |---|---|---|
@@ -660,13 +673,14 @@ the measurement only sees the 9 institutions whose page slug is their acronym.
 | `revelio_database.obmep_candidates_step_1` | one row per user | 6,849,674 |
 | `obmep_candidates_step_1_position` | one row per position | 30,389,044 |
 | `obmep_candidates_step_1_education` | one row per education entry | 15,712,737 |
-| `obmep_candidates_step_1_shanghai.parquet` | one row per flagged user | 990,937 |
+| `obmep_candidates_step_1_shanghai.parquet` | one row per flagged user | 1,140,993 |
 | `obmep_candidates_step_1_position_rcid` | one row per position | 30,389,044 |
 | `linkedin_company_rcid_2026.parquet` | one row per resolved firm | 468 |
-| `obmep_candidates_step_1_firms_positions.parquet` | one row per matched position | 737,682 |
-| `obmep_candidates_step_1_firms.parquet` | one row per flagged user | 436,813 |
-| `obmep_candidates_step_1_ruf_degree.parquet` | one row per flagged user | 583,570 |
-| `obmep_candidates_selected.parquet` | one row per selected user | 1,297,109 |
+| `obmep_candidates_step_1_firms_positions.parquet` | one row per matched position | 826,802 |
+| `obmep_candidates_step_1_firms.parquet` | one row per flagged user | 484,890 |
+| `obmep_candidates_step_1_ruf_degree.parquet` | one row per flagged user | 701,930 |
+| `obmep_candidates_selected.parquet` | one row per selected user | 1,468,102 |
+| `obmep_candidates_selected_positions.parquet` | one row per selected position | 8,219,165 |
 | `revelio_database.rsid_br_user_share` | one row per matched (rsid, `university_raw`) pair | 24,276 over 975 rsids |
 | `revelio_database.obmep_br_cohort_user_ids_alt` | one row per user | 5,763,858 |
 | `revelio_database.obmep_candidates_step_1_alt` | one row per user | 6,870,111 |

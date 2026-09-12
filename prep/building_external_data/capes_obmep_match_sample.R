@@ -84,7 +84,23 @@ oa_dir <- file.path(obmep_root, "Data/intermediate/openalex_institutions")
 # produto a amostra sai. Ligado = canonico; desligado = a variante sem
 # openalex_id na chave, onde as duas instituicoes PODEM divergir.
 key_oa_ids <- Sys.getenv("OBMEP_MATCH_KEY_OA", unset = "1") != "0"
-variant_tag <- if (key_oa_ids) "" else "_noinst"
+
+# O BRACO, igual ao do script 27 (nota 10 de la), mais um valor que
+# so existe aqui: "union" sorteia da uniao deduplicada dos dois
+# bracos que o script 27c grava. Na uniao a chave forcou UM diploma,
+# nao os dois, e qual foi esta na coluna arms -- e por isso que o
+# outro diploma passa a ser evidencia de verdade.
+match_arm <- Sys.getenv("OBMEP_MATCH_ARM", unset = "both")
+if (!match_arm %in% c("both", "msc", "phd", "union")) {
+  stop("OBMEP_MATCH_ARM = '", match_arm, "' nao existe. ",
+       "Use both, msc, phd ou union.")
+}
+is_union <- match_arm == "union"
+
+variant_tag <- paste0(
+  if (key_oa_ids) "" else "_noinst",
+  switch(match_arm, both = "", msc = "_msc", phd = "_phd",
+         union = "_union"))
 
 out_dir <- file.path(capes_dir, paste0("capes_obmep_match", variant_tag))
 
@@ -122,10 +138,19 @@ n_draw <- 100L
 
 verdict_domain <- c("mesma_pessoa", "pessoa_diferente", "ambiguo")
 
-# Medidos em 2026-09-06 sobre este sorteio. Divergencia de contagem
+# Medidos em 2026-09-09 sobre o sorteio canonico atualizado. Divergencia de contagem
 # avisa; divergencia estrutural aborta.
-if (key_oa_ids) {
-  exp_pop <- 87110L
+if (is_union) {
+  # Medidos em 2026-09-09 sobre a uniao. A composicao muda porque a
+  # uniao alcanca gente que o canonico nao alcancava.
+  exp_pop <- 111333L
+  exp_msc_only <- NA_integer_
+  exp_both <- NA_integer_
+  exp_phd_only <- NA_integer_
+  exp_msc_rows <- NA_integer_
+  exp_phd_rows <- NA_integer_
+} else if (key_oa_ids) {
+  exp_pop <- 88772L
   exp_msc_only <- 66L
   exp_both <- 33L
   exp_phd_only <- 1L
@@ -212,17 +237,21 @@ sample_sql <- sprintf(
   "SELECT person_key,
           CAST(user_id AS VARCHAR)              AS user_id,
           capes_full_name, revelio_fullname, best_variant,
-          revelio_surnames, birth_year, key_string,
+          revelio_surnames, birth_year,
+          %2$s,
           jw_combo, jw_lastname, jw_name,
           capes_msc_start_year, capes_msc_oa_id,
           capes_phd_start_year, capes_phd_oa_id,
           hash(person_key || '#' || CAST(user_id AS VARCHAR)
-               || '#%d')                        AS hk
-   FROM read_parquet(%s)
-   WHERE jw_combo >= %.17g AND jw_lastname >= %.17g
+               || '#%1$d')                      AS hk
+   FROM read_parquet(%3$s)
+   WHERE jw_combo >= %4$.17g AND jw_lastname >= %4$.17g
    ORDER BY hk, person_key, user_id
-   LIMIT %d",
-  seed, cand_sql, jw_cut, jw_cut, n_draw
+   LIMIT %5$d",
+  seed,
+  if (is_union) "arms, in_canonical, key_string_msc, key_string_phd"
+  else "key_string",
+  cand_sql, jw_cut, n_draw
 )
 
 if (file.exists(sample_path)) {
@@ -394,11 +423,28 @@ side_qa <- dbGetQuery(con, "
     (SELECT count(*) FROM capes_pick WHERE lvl = 'phd')    AS c_phd,
     (SELECT count(*) FROM rev_pick   WHERE arm = 'master') AS r_msc,
     (SELECT count(*) FROM rev_pick   WHERE arm = 'phd')    AS r_phd")
-if (side_qa$c_msc != side_qa$r_msc || side_qa$c_phd != side_qa$r_phd) {
+# Nos produtos em que a chave forcou os DOIS diplomas, as duas pontas
+# tem de achar o mesmo numero de cada nivel: se nao acham, o
+# desempate deslizou e o caderno mostraria outro diploma.
+#
+# NA UNIAO isso deixa de valer por construcao. A chave forcou UM
+# diploma, entao o outro pode existir na CAPES e nao no LinkedIn (ou
+# o contrario, quando e um diploma de fora do Brasil). A divergencia
+# E o produto. O que ainda TEM de valer, e vale por par e nao por
+# total, esta afirmado no laco de invariantes de `wide` abaixo: no
+# diploma forcado as duas pontas existem e concordam.
+if (!is_union &&
+    (side_qa$c_msc != side_qa$r_msc || side_qa$c_phd != side_qa$r_phd)) {
   stop("Contagem de diplomas divergiu entre as pontas (",
        side_qa$c_msc, "/", side_qa$c_phd, " CAPES contra ",
        side_qa$r_msc, "/", side_qa$r_phd, " Revelio). O desempate ",
        "deslizou em relacao ao script 27 -- ver nota 4.")
+}
+if (is_union) {
+  cat(sprintf(
+    "diplomas: CAPES %d msc / %d phd, Revelio %d msc / %d phd\n",
+    side_qa$c_msc, side_qa$c_phd, side_qa$r_msc, side_qa$r_phd))
+  cat("a diferenca e esperada: a chave forcou so um dos dois\n")
 }
 if (!is.na(exp_msc_rows) &&
     (side_qa$c_msc != exp_msc_rows || side_qa$c_phd != exp_phd_rows)) {
@@ -427,13 +473,13 @@ inst_flag <- function(a, b) sprintf(
 wide <- dbGetQuery(con, sprintf("
   SELECT
     s.person_key, CAST(s.user_id AS VARCHAR) AS user_id,
-
+    %4$s
     s.capes_full_name, s.revelio_fullname,
     s.best_variant, s.revelio_surnames,
     round(s.jw_combo, 4) AS jw_combo,
     round(s.jw_lastname, 4) AS jw_lastname,
     round(s.jw_name, 4) AS jw_name,
-    s.birth_year, s.key_string,
+    s.birth_year, %5$s,
 
     cm.yr                 AS msc_capes_year,
     rm.y0                 AS msc_rev_start,
@@ -479,7 +525,13 @@ wide <- dbGetQuery(con, sprintf("
   ORDER BY s.hk, s.person_key, s.user_id",
   inst_flag("cm.openalex_id", "rm.openalex_id"),
   inst_flag("cp.openalex_id", "rp.openalex_id"),
-  qp(sample_path)
+  qp(sample_path),
+  if (is_union)
+    "s.arms,
+     CASE WHEN s.in_canonical THEN 'sim' ELSE 'nao' END AS in_canonical,"
+  else "",
+  if (is_union) "s.key_string_msc, s.key_string_phd"
+  else "s.key_string"
 ))
 wide$user_id <- as.character(wide$user_id)
 wide$hk <- NULL
@@ -489,22 +541,51 @@ wide$motivo <- ""
 
 # As igualdades que a chave forcou. Falharem aqui significa que a
 # reconstrucao esta errada, nao que o dado e interessante.
+#
+# NA UNIAO isso passa a valer POR DIPLOMA. A chave forcou so o
+# diploma que esta em arms; para o outro, ano e instituicao sao
+# livres -- e e justamente ali que mora a evidencia independente.
+# Exigir a igualdade dos dois aqui reprovaria os pares que a uniao
+# existe para achar.
 stopifnot(
   nrow(wide) == n_draw,
-  all(grepl("^[0-9]+$", wide$user_id)),
-  all(is.na(wide$msc_capes_year) | wide$msc_capes_year == wide$msc_rev_start),
-  all(is.na(wide$phd_capes_year) | wide$phd_capes_year == wide$phd_rev_start),
-  all(is.na(wide$msc_capes_year) | !is.na(wide$msc_capes_oa_name)),
-  all(is.na(wide$phd_capes_year) | !is.na(wide$phd_capes_oa_name))
+  all(grepl("^[0-9]+$", wide$user_id))
 )
 
-# No produto canonico a chave FORCOU os openalex_id a baterem, entao
-# um 'DIFERENTE' aqui significaria que a chave nao fez o que promete.
-if (key_oa_ids &&
-    any(c(wide$msc_inst_match, wide$phd_inst_match) == "DIFERENTE",
-        na.rm = TRUE)) {
-  stop("Instituicoes divergentes no produto canonico. A chave exigiu ",
-       "igualdade de openalex_id; isto e impossivel sem um bug.")
+forced <- function(lvl) {
+  if (is_union) grepl(lvl, wide$arms, fixed = TRUE) else
+    rep(TRUE, nrow(wide))
+}
+for (lvl in c("msc", "phd")) {
+  f <- forced(lvl)
+  yr_c <- wide[[paste0(lvl, "_capes_year")]]
+  yr_r <- wide[[paste0(lvl, "_rev_start")]]
+  oa_c <- wide[[paste0(lvl, "_capes_oa_name")]]
+  mt <- wide[[paste0(lvl, "_inst_match")]]
+  # No diploma forcado a chave exigiu ano E instituicao dos dois
+  # lados, entao as duas pontas TEM de existir e concordar. Fora
+  # dele, nada e exigido.
+  stopifnot(
+    all(!f | !is.na(yr_c)),
+    all(!f | !is.na(yr_r)),
+    all(!f | yr_c == yr_r),
+    all(!f | !is.na(oa_c))
+  )
+  # No diploma FORCADO um DIFERENTE seria impossivel sem um bug: a
+  # chave exigiu igualdade de openalex_id. Fora dele, e dado.
+  if (key_oa_ids && any(f & !is.na(mt) & mt == "DIFERENTE")) {
+    stop("Instituicao divergente no diploma ", lvl, ", que a chave ",
+         "forcou a ser igual. Isto e impossivel sem um bug.")
+  }
+}
+if (is_union) {
+  livre <- sum(
+    (!forced("msc") & !is.na(wide$msc_inst_match) &
+       wide$msc_inst_match == "DIFERENTE") |
+    (!forced("phd") & !is.na(wide$phd_inst_match) &
+       wide$phd_inst_match == "DIFERENTE"))
+  cat("pares com instituicao DIFERENTE no diploma NAO forcado:",
+      livre, "-- isso e evidencia, nao erro\n")
 }
 
 ####################################################################
@@ -575,42 +656,86 @@ pop_res <- dbGetQuery(con, sprintf("
     count_if(c.msc_oa_id IS NOT NULL AND r.msc_oa_id IS NOT NULL
              AND c.msc_oa_id <> r.msc_oa_id) AS inst_dif,
     count_if(c.msc_oa_id IS NULL OR r.msc_oa_id IS NULL) AS inst_sem
-  FROM read_parquet(%s) p
-  JOIN read_parquet(%s) c USING (person_key)
-  JOIN read_parquet(%s) r USING (user_id)
-  WHERE p.jw_combo >= %.17g AND p.jw_lastname >= %.17g",
-  cand_sql, qp(file.path(out_dir, "capes_person_keys.parquet")),
-  qp(file.path(out_dir, "revelio_user_keys.parquet")), jw_cut, jw_cut))
+  FROM read_parquet(%1$s) p
+  %2$s
+  WHERE p.jw_combo >= %3$.17g AND p.jw_lastname >= %3$.17g",
+  cand_sql,
+  # A uniao ja carrega os quatro openalex_id nas suas proprias
+  # colunas, entao nao ha o que juntar -- e ela nao tem os parquet
+  # de chave por pessoa, que sao por braco.
+  if (is_union)
+    sprintf("JOIN (SELECT DISTINCT person_key,
+                            capes_msc_oa_id AS msc_oa_id
+                   FROM read_parquet(%1$s)) c USING (person_key)
+             JOIN (SELECT DISTINCT user_id,
+                            revelio_msc_oa_id AS msc_oa_id
+                   FROM read_parquet(%1$s)) r USING (user_id)", cand_sql)
+  else
+    sprintf("JOIN read_parquet(%s) c USING (person_key)
+             JOIN read_parquet(%s) r USING (user_id)",
+            qp(file.path(out_dir, "capes_person_keys.parquet")),
+            qp(file.path(out_dir, "revelio_user_keys.parquet"))),
+  jw_cut))
+# Os tres niveis particionam a populacao: se nao somam, o join
+# acima abriu em leque e todos os pct_populacao estao errados.
+if (sum(pop_res$msc_only, pop_res$both, pop_res$phd_only) != pop_qa) {
+  stop("A composicao por nivel soma ",
+       sum(pop_res$msc_only, pop_res$both, pop_res$phd_only),
+       " e a populacao e ", pop_qa,
+       ". O join da populacao abriu em leque.")
+}
+stopifnot(pop_res$exact + pop_res$inexact == pop_qa)
+
 res$na_populacao <- as.numeric(pop_res[1, ])
 res$pct_populacao <- round(100 * res$na_populacao / pop_qa, 1)
 
+# O texto que muda com o produto. A uniao precisa dizer, em cima, que
+# a chave forcou UM diploma e que o outro e evidencia -- sem isso o
+# revisor gasta tempo conferindo o que foi forcado e desconfia do
+# que deveria estar lendo.
+leia_chave <- if (is_union) c(
+  "A chave exigiu igualdade EXATA em, no minimo, UM diploma:",
+  "  primeiro nome, o ano de inicio daquele diploma e o openalex_id",
+  "  da instituicao dele. A coluna arms diz QUAL diploma foi esse.",
+  "Para o diploma que NAO esta em arms, ano e instituicao NAO foram",
+  "forcados: ali a concordancia -- ou a divergencia -- e EVIDENCIA,",
+  "e e a melhor coisa que este caderno tem.",
+  "in_canonical = sim e par que o produto canonico ja tinha; nao e",
+  "  par NOVO, que so a uniao alcanca. 21,1% da uniao e novo."
+) else if (key_oa_ids) c(
+  "A chave exigiu igualdade EXATA em cinco campos: primeiro nome, ano de",
+  "  inicio do mestrado, ano de inicio do doutorado, e o openalex_id",
+  "  da instituicao de cada um dos dois.",
+  "Nas duas pontas esses campos batem POR CONSTRUCAO -- conferir que",
+  "o ano bate, ou que a instituicao e a mesma, nao mede nada."
+) else c(
+  "!!! ATENCAO: NESTE ARQUIVO A CHAVE NAO USA A INSTITUICAO !!!",
+  "O placebo mede 57,6% dos pares reproduzidos dando a cada pessoa o",
+  "sobrenome de outro brasileiro. Isto e uma MEDICAO, nao uma tabela",
+  "de pareamento. Espere encontrar erro grosseiro.",
+  ""
+)
+
+leia_dif <- if (is_union) {
+  "Aqui DIFERENTE e POSSIVEL -- e esperado -- no diploma fora de arms."
+} else if (key_oa_ids) {
+  "Neste arquivo 'DIFERENTE' e impossivel: a chave forcou a igualdade."
+} else {
+  "Neste arquivo 'DIFERENTE' aparece em ~1/3 dos pares da populacao."
+}
+
 leia <- data.frame(c(
   "AMOSTRA DE 100 PARES CAPES x LINKEDIN, PARA JULGAR A MAO",
-  paste0("Produto: ", if (key_oa_ids) "CANONICO" else "VARIANTE SEM openalex_id",
-         " -- conservador (jw_combo >= ", jw_cut, " E jw_lastname >= ", jw_cut, ")"),
+  paste0("Produto: ",
+         if (is_union) "UNIAO DOS BRACOS msc + phd"
+         else if (key_oa_ids) "CANONICO"
+         else "VARIANTE SEM openalex_id",
+         " -- conservador (jw_combo >= ", jw_cut,
+         " E jw_lastname >= ", jw_cut, ")"),
   paste0("Populacao: ", formatC(pop_qa, big.mark = ".", decimal.mark = ",",
          format = "d"), " pares. Seed ", seed, "."),
   "",
-  if (key_oa_ids)
-    "A chave exigiu igualdade EXATA em cinco campos: primeiro nome, ano de"
-  else
-    "!!! ATENCAO: NESTE ARQUIVO A CHAVE NAO USA A INSTITUICAO !!!",
-  if (key_oa_ids)
-    "  inicio do mestrado, ano de inicio do doutorado, e o openalex_id"
-  else
-    "O placebo mede 57,6% dos pares reproduzidos dando a cada pessoa o",
-  if (key_oa_ids)
-    "  da instituicao de cada um dos dois."
-  else
-    "sobrenome de outro brasileiro. Isto e uma MEDICAO, nao uma tabela",
-  if (key_oa_ids)
-    "Nas duas pontas esses campos batem POR CONSTRUCAO -- conferir que"
-  else
-    "de pareamento. Espere encontrar erro grosseiro.",
-  if (key_oa_ids)
-    "o ano bate, ou que a instituicao e a mesma, nao mede nada."
-  else
-    "",
+  leia_chave,
   "",
   "COMO ESTA ARRUMADO",
   "Cada campo da CAPES fica ENCOSTADO no seu par do Revelio, para a",
@@ -626,10 +751,7 @@ leia <- data.frame(c(
   "  igual      as duas fontes apontam a mesma instituicao",
   "  DIFERENTE  apontam instituicoes diferentes",
   "  sem_id     um dos lados nao resolveu a instituicao",
-  if (key_oa_ids)
-    "Neste arquivo 'DIFERENTE' e impossivel: a chave forcou a igualdade."
-  else
-    "Neste arquivo 'DIFERENTE' aparece em ~1/3 dos pares da populacao.",
+  leia_dif,
   "",
   "O QUE ESTA EM JULGAMENTO",
   "Se as duas linhas sao a MESMA PESSOA. A evidencia util e:",
@@ -654,17 +776,41 @@ leia <- leia[trimws(leia[[1]]) != "" | TRUE, , drop = FALSE]
 names(leia) <- "Como ler este caderno"
 
 n_col <- ncol(wide)
-stopifnot(n_col == 42L)
+# A uniao acrescenta arms e in_canonical (posicoes 4 e 5, dentro do
+# painel congelado, porque arms e o contexto sem o qual nenhuma
+# linha se le) e parte key_string em duas. 42 -> 45.
+stopifnot(n_col == if (is_union) 45L else 42L)
 
 # Colunas por LADO, nao por bloco: e a alternancia que mostra de que
 # fonte cada celula vem.
-capes_cols <- c(4, 6, 13, 16, 18, 21, 23, 27, 30, 32, 35, 37)
-rev_cols <- c(5, 7, 14, 15, 17, 19, 22, 24, 25, 26,
-              28, 29, 31, 33, 36, 38, 39, 40)
-flag_cols <- c(20, 34)
-score_cols <- 8:12
-edit_cols <- c(41, 42)
-wrap_cols <- c(4, 5, 6, 12, 16, 17, 21, 22, 30, 31, 35, 36, 42)
+# Os indices deslocam em bloco quando a uniao entra: +2 para as
+# colunas 4..11, key_string vira duas (14 e 15) e +3 para tudo dali
+# em diante. Uma unica edicao coordenada -- se um destes vetores sair
+# de sincronia com o SELECT, o caderno pinta a coluna errada.
+if (is_union) {
+  ctx_cols <- c(4, 5)
+  capes_cols <- c(6, 8, 16, 19, 21, 24, 26, 30, 33, 35, 38, 40)
+  rev_cols <- c(7, 9, 17, 18, 20, 22, 25, 27, 28, 29,
+                31, 32, 34, 36, 39, 41, 42, 43)
+  flag_cols <- c(23, 37)
+  score_cols <- 10:15
+  edit_cols <- c(44, 45)
+  wrap_cols <- c(6, 7, 8, 14, 15, 19, 20, 24, 25, 33, 34, 38, 39, 45)
+} else {
+  ctx_cols <- integer(0)
+  capes_cols <- c(4, 6, 13, 16, 18, 21, 23, 27, 30, 32, 35, 37)
+  rev_cols <- c(5, 7, 14, 15, 17, 19, 22, 24, 25, 26,
+                28, 29, 31, 33, 36, 38, 39, 40)
+  flag_cols <- c(20, 34)
+  score_cols <- 8:12
+  edit_cols <- c(41, 42)
+  wrap_cols <- c(4, 5, 6, 12, 16, 17, 21, 22, 30, 31, 35, 36, 42)
+}
+stopifnot(
+  max(c(capes_cols, rev_cols, flag_cols, score_cols, edit_cols,
+        wrap_cols, ctx_cols)) <= n_col,
+  length(intersect(capes_cols, rev_cols)) == 0L
+)
 
 wb <- createWorkbook()
 hdr <- createStyle(textDecoration = "bold", fgFill = "#E8E8E8",
@@ -676,6 +822,8 @@ capsty <- createStyle(fgFill = "#F3EFF7", valign = "top")
 revsty <- createStyle(fgFill = "#EDF2F7", valign = "top")
 flagsty <- createStyle(fgFill = "#FBF0E6", valign = "top",
                        textDecoration = "bold")
+ctxsty <- createStyle(fgFill = "#E4EFE4", valign = "top",
+                      textDecoration = "bold")
 yours <- createStyle(fgFill = "#FFF7D6", border = "TopBottomLeftRight",
                      borderColour = "#C9A227", valign = "top")
 
@@ -686,7 +834,10 @@ setColWidths(wb, "Como ler", cols = 1, widths = 74)
 
 addWorksheet(wb, "Amostra")
 writeData(wb, "Amostra", wide, withFilter = TRUE)
-freezePane(wb, "Amostra", firstActiveRow = 2, firstActiveCol = 6)
+# Congela ate in_canonical na uniao: arms e o contexto sem o qual
+# nenhuma linha se le, entao ele nao pode rolar para fora da tela.
+freezePane(wb, "Amostra", firstActiveRow = 2,
+           firstActiveCol = if (is_union) 6 else 6)
 addStyle(wb, "Amostra", hdr, rows = 1, cols = 1:n_col, gridExpand = TRUE)
 rr <- 2:(nrow(wide) + 1)
 # Nota 2: id como TEXTO tambem no formato da celula.
@@ -696,28 +847,54 @@ addStyle(wb, "Amostra", capsty, rows = rr, cols = capes_cols, gridExpand = TRUE)
 addStyle(wb, "Amostra", revsty, rows = rr, cols = rev_cols, gridExpand = TRUE)
 addStyle(wb, "Amostra", flagsty, rows = rr, cols = flag_cols, gridExpand = TRUE)
 addStyle(wb, "Amostra", yours, rows = rr, cols = edit_cols, gridExpand = TRUE)
+if (length(ctx_cols)) {
+  addStyle(wb, "Amostra", ctxsty, rows = rr, cols = ctx_cols,
+           gridExpand = TRUE)
+}
 addStyle(wb, "Amostra", wrap, rows = rr, cols = wrap_cols, gridExpand = TRUE,
          stack = TRUE)
-setColWidths(wb, "Amostra", cols = 1:n_col, widths = c(
-  7, 14, 13,
-  32, 26, 24, 24, 10, 11, 10, 7, 26,
-  8, 8, 8, 34, 34, 30, 30, 12, 28, 28, 22, 22, 28, 11,
-  8, 8, 8, 34, 34, 30, 30, 12, 28, 28, 22, 22, 28, 11,
-  17, 34))
+lvl_widths <- c(8, 8, 8, 34, 34, 30, 30, 12, 28, 28, 22, 22, 28, 11)
+col_widths <- if (is_union) {
+  c(7, 14, 13,            # pair_id, person_key, user_id
+    10, 12,               # arms, in_canonical
+    32, 26, 24, 24,       # nomes e a variante que marcou o ponto
+    10, 11, 10, 7,        # os tres escores e o ano de nascimento
+    26, 26,               # key_string_msc, key_string_phd
+    lvl_widths, lvl_widths,
+    17, 34)
+} else {
+  c(7, 14, 13,
+    32, 26, 24, 24, 10, 11, 10, 7, 26,
+    lvl_widths, lvl_widths,
+    17, 34)
+}
+stopifnot(length(col_widths) == n_col)
+setColWidths(wb, "Amostra", cols = 1:n_col, widths = col_widths)
 
 # Lista suspensa a partir de aba escondida: 'inline' estoura o limite
 # do Excel com facilidade e falha em silencio.
 addWorksheet(wb, "dominio")
 writeData(wb, "dominio", data.frame(veredito = verdict_domain))
 sheetVisibility(wb)[which(names(wb) == "dominio")] <- "hidden"
-dataValidation(wb, "Amostra", col = 41, rows = rr,
+dataValidation(wb, "Amostra", col = edit_cols[1], rows = rr,
                type = "list", value = "'dominio'!$A$2:$A$4")
 
-# O olho vai para a divergencia de instituicao (coluna T e AH).
-conditionalFormatting(wb, "Amostra", cols = 1:n_col, rows = rr,
-                      rule = 'OR($T2="DIFERENTE",$AH2="DIFERENTE")',
-                      type = "expression",
-                      style = createStyle(bgFill = "#FADBD8"))
+# O olho vai para a divergencia de instituicao. As letras saem de
+# flag_cols em vez de ficarem escritas a mao: com a uniao elas andam
+# de T/AH para W/AK, e uma formula desatualizada pintaria a linha
+# errada sem reclamar.
+flag_letters <- vapply(flag_cols, function(i) {
+  if (i <= 26L) LETTERS[i] else
+    paste0(LETTERS[(i - 1L) %/% 26L], LETTERS[(i - 1L) %% 26L + 1L])
+}, character(1))
+stopifnot(identical(
+  flag_letters, if (is_union) c("W", "AK") else c("T", "AH")))
+conditionalFormatting(
+  wb, "Amostra", cols = 1:n_col, rows = rr,
+  rule = sprintf('OR($%s2="DIFERENTE",$%s2="DIFERENTE")',
+                 flag_letters[1], flag_letters[2]),
+  type = "expression",
+  style = createStyle(bgFill = "#FADBD8"))
 
 addWorksheet(wb, "Resumo")
 writeData(wb, "Resumo",
@@ -761,7 +938,9 @@ cat("populacao conservadora:", pop_qa, "pares\n")
 cat("sorteados             :", n_draw, "pares,", n_draw, "pessoas,",
     n_draw, "users\n")
 cat("diplomas reconstruidos:", side_qa$c_msc, "mestrados e",
-    side_qa$c_phd, "doutorados, iguais nas duas pontas\n")
+    side_qa$c_phd, "doutorados",
+    if (is_union) "na CAPES (o LinkedIn pode ter menos)\n"
+    else "iguais nas duas pontas\n")
 
 cat("\n=========== COMPOSICAO ===========\n")
 print(res, row.names = FALSE)
