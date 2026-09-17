@@ -88,16 +88,36 @@ obmep_root <- Sys.getenv(
   "OBMEP_ROOT",
   unset = "C:/Users/megaj/Globtalent Dropbox/OBMEP"
 )
-match_cohort <- Sys.getenv("OBMEP_MATCH_COHORT", unset = "legacy")
+match_cohort <- Sys.getenv("OBMEP_MATCH_COHORT", unset = "degree_duration")
 if (!match_cohort %in% c("legacy", "degree_duration")) {
   stop("OBMEP_MATCH_COHORT = '", match_cohort,
        "' does not exist. Use legacy or degree_duration.")
 }
 cohort_tag <- if (match_cohort == "degree_duration") "_degree_duration" else ""
+institution_mode <- Sys.getenv("OBMEP_MATCH_INST_KEY", unset = "openalex")
+if (!institution_mode %in% c("openalex", "mantenedora")) {
+  stop("OBMEP_MATCH_INST_KEY = '", institution_mode,
+       "' does not exist. Use openalex or mantenedora.")
+}
+if (institution_mode == "mantenedora" && match_cohort != "degree_duration") {
+  stop("OBMEP_MATCH_INST_KEY=mantenedora is defined only for the latest ",
+       "degree_duration cohort.")
+}
+co_ies_version <- Sys.getenv("OBMEP_MATCH_CO_IES_VERSION", unset = "base")
+if (!co_ies_version %in% c("base", "regex_v1")) {
+  stop("OBMEP_MATCH_CO_IES_VERSION = '", co_ies_version,
+       "' does not exist. Use base or regex_v1.")
+}
+if (institution_mode == "openalex" && co_ies_version != "base") {
+  stop("OBMEP_MATCH_CO_IES_VERSION applies only to maintainer matching.")
+}
 # A mesma chave do script 27: env OBMEP_MATCH_KEY_OA decide qual das
 # duas variantes e medida. O placebo le so o que aquele script gravou,
 # entao basta apontar para o diretorio certo.
 key_oa_ids <- Sys.getenv("OBMEP_MATCH_KEY_OA", unset = "1") != "0"
+if (institution_mode == "mantenedora" && !key_oa_ids) {
+  stop("OBMEP_MATCH_KEY_OA=0 is incompatible with maintainer mode.")
+}
 
 # O BRACO, tambem igual ao do script 27 (nota 10 de la): "msc" e
 # "phd" medem os bracos por diploma, que sao onde a chave exige UM
@@ -108,11 +128,18 @@ if (!match_arm %in% c("both", "msc", "phd")) {
   stop("OBMEP_MATCH_ARM = '", match_arm, "' nao existe. ",
        "Use both, msc ou phd.")
 }
+if (institution_mode == "mantenedora" && match_arm == "both") {
+  stop("Maintainer matching is arm-specific. Set OBMEP_MATCH_ARM to msc or phd.")
+}
 use_msc <- match_arm != "phd"
 use_phd <- match_arm != "msc"
 
 variant_tag <- paste0(
-  cohort_tag, if (key_oa_ids) "" else "_noinst",
+  cohort_tag,
+  if (institution_mode == "openalex" && !key_oa_ids) "_noinst" else "",
+  if (institution_mode == "mantenedora") paste0(
+    "_mantenedora",
+    if (co_ies_version == "regex_v1") "_regex_v1" else "") else "",
   switch(match_arm, both = "", msc = "_msc", phd = "_phd"))
 
 out_dir <- file.path(
@@ -190,13 +217,22 @@ cat("Placebo do pareamento CAPES x candidatos selecionados\n")
 cat("coorte  :", match_cohort, "\n")
 cat("entrada :", out_dir, "\n")
 cat("corte   : jw_combo >=", jw_cut, "E jw_lastname >=", jw_cut, "\n")
-cat("variante:", if (key_oa_ids) "canonica" else "SEM openalex_id", "\n")
+cat("variante:", if (institution_mode == "mantenedora")
+    paste0("CO_MANTENEDORA/CO_IES ", co_ies_version,
+           ", braco ", match_arm) else
+    if (key_oa_ids) "canonica" else "SEM openalex_id", "\n")
 cat("DuckDB  :", dbGetQuery(con, "SELECT version() AS v")$v, "\n\n")
 
+ck_institution_fields <- if (institution_mode == "mantenedora") {
+  "msc_institution_bucket AS msc_oa_id,
+   phd_start_year, phd_institution_bucket AS phd_oa_id"
+} else {
+  "msc_oa_id, phd_start_year, phd_oa_id"
+}
 invisible(dbExecute(con, sprintf(
   "CREATE TABLE ck AS SELECT person_key, first_name, msc_start_year,
-          msc_oa_id, phd_start_year, phd_oa_id, key_string AS key_real
-   FROM read_parquet(%s)", qp(keys_path))))
+          %s, key_string AS key_real
+   FROM read_parquet(%s)", ck_institution_fields, qp(keys_path))))
 invisible(dbExecute(con, sprintf(
   "CREATE TABLE cvraw AS SELECT person_key, csur, n_parts, n_sur
    FROM read_parquet(%s)", qp(vars_path))))
@@ -490,7 +526,7 @@ cat("pares do braco B (j=1) gravados:", pairs_n, "\n")
 ### larga, em vez de deduzir.
 ####################################################################
 
-if (!key_oa_ids) {
+if (institution_mode == "openalex" && !key_oa_ids) {
   canon_cand <- file.path(canon_dir, "capes_obmep_match_candidates.parquet")
   wide_cand <- file.path(out_dir, "capes_obmep_match_candidates.parquet")
   if (file.exists(canon_cand) && file.exists(wide_cand)) {

@@ -84,19 +84,47 @@ obmep_root <- Sys.getenv(
   unset = "C:/Users/megaj/Globtalent Dropbox/OBMEP"
 )
 capes_dir <- file.path(obmep_root, "Data/intermediate/capes_discentes")
-match_cohort <- Sys.getenv("OBMEP_MATCH_COHORT", unset = "legacy")
+match_cohort <- Sys.getenv("OBMEP_MATCH_COHORT", unset = "degree_duration")
 if (!match_cohort %in% c("legacy", "degree_duration")) {
   stop("OBMEP_MATCH_COHORT = '", match_cohort,
        "' does not exist. Use legacy or degree_duration.")
 }
 cohort_tag <- if (match_cohort == "degree_duration") "_degree_duration" else ""
+institution_mode <- Sys.getenv("OBMEP_MATCH_INST_KEY", unset = "openalex")
+if (!institution_mode %in% c("openalex", "mantenedora")) {
+  stop("OBMEP_MATCH_INST_KEY = '", institution_mode,
+       "' does not exist. Use openalex or mantenedora.")
+}
+if (institution_mode == "mantenedora" && match_cohort != "degree_duration") {
+  stop("OBMEP_MATCH_INST_KEY=mantenedora is defined only for the latest ",
+       "degree_duration cohort.")
+}
+co_ies_version <- Sys.getenv("OBMEP_MATCH_CO_IES_VERSION", unset = "base")
+if (!co_ies_version %in% c("base", "regex_v1")) {
+  stop("OBMEP_MATCH_CO_IES_VERSION = '", co_ies_version,
+       "' does not exist. Use base or regex_v1.")
+}
+if (institution_mode == "openalex" && co_ies_version != "base") {
+  stop("OBMEP_MATCH_CO_IES_VERSION applies only to maintainer matching.")
+}
 
 arms <- c("msc", "phd")
+institution_tag <- if (institution_mode == "mantenedora") {
+  paste0("_mantenedora",
+         if (co_ies_version == "regex_v1") "_regex_v1" else "")
+} else ""
 arm_dirs <- setNames(
-  file.path(capes_dir, paste0("capes_obmep_match", cohort_tag, "_", arms)), arms
+  file.path(capes_dir, paste0("capes_obmep_match", cohort_tag,
+                             institution_tag, "_", arms)), arms
 )
 canon_dir <- file.path(capes_dir, paste0("capes_obmep_match", cohort_tag))
-out_dir <- file.path(capes_dir, paste0("capes_obmep_match", cohort_tag, "_union"))
+out_dir <- if (institution_mode == "mantenedora") {
+  file.path(capes_dir, paste0(
+    "capes_obmep_match_union_degree_duration_mantenedora",
+    if (co_ies_version == "regex_v1") "_regex_v1" else ""))
+} else {
+  file.path(capes_dir, paste0("capes_obmep_match", cohort_tag, "_union"))
+}
 
 canon_file <- file.path(canon_dir, "capes_obmep_match_candidates.parquet")
 out_path <- file.path(out_dir, "capes_obmep_match_candidates.parquet")
@@ -109,11 +137,15 @@ jw_cut <- 0.90
 
 mem_limit <- "10GB"
 tmp_dir <- file.path(
-  Sys.getenv("TEMP"), paste0("duckdb_tmp_capes_obmep_union", cohort_tag))
+  Sys.getenv("TEMP"), paste0("duckdb_tmp_capes_obmep_union", cohort_tag,
+                             institution_tag))
 
 # Medidos em 2026-09-09 nos dois bracos. divergencia estrutural
 # aborta, divergencia de contagem avisa.
-exp_arm_pairs <- if (match_cohort == "degree_duration") {
+exp_arm_pairs <- if (institution_mode == "mantenedora") {
+  if (co_ies_version == "base") c(msc = 144987L, phd = 37951L) else
+    c(msc = 163699L, phd = 43393L)
+} else if (match_cohort == "degree_duration") {
   c(msc = 161823L, phd = 41873L)
 } else c(msc = 106320L, phd = 29118L)
 exp_canon_pairs <- if (match_cohort == "degree_duration") 135777L else 88772L
@@ -132,7 +164,7 @@ for (a in arms) {
          "prep/building_external_data/capes_obmep_match_placebo.R")
   }
 }
-stopifnot(file.exists(canon_file))
+if (institution_mode == "openalex") stopifnot(file.exists(canon_file))
 
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 dir.create(tmp_dir, recursive = TRUE, showWarnings = FALSE)
@@ -140,10 +172,11 @@ dir.create(tmp_dir, recursive = TRUE, showWarnings = FALSE)
 # Guarda do padrao 21alt: esta uniao nao escreve no canonico nem em
 # nenhum dos bracos por nenhum caminho. Tamanho e mtime capturados
 # aqui e reconferidos no fim.
-guarded <- c(canon_file,
+guarded <- c(if (institution_mode == "openalex") canon_file else character(),
              file.path(arm_dirs, "capes_obmep_match_candidates.parquet"))
 guard_before <- file.info(guarded)[c("size", "mtime")]
-for (d in c(canon_dir, unname(arm_dirs))) {
+for (d in c(if (institution_mode == "openalex") canon_dir else character(),
+            unname(arm_dirs))) {
   if (normalizePath(out_dir, mustWork = FALSE) ==
       normalizePath(d, mustWork = FALSE)) {
     stop("A uniao resolveu para um diretorio de entrada. Abortando.")
@@ -170,8 +203,11 @@ qp <- function(path) {
 
 cat("Uniao dos bracos por diploma do pareamento CAPES x selecionados\n")
 cat("coorte    :", match_cohort, "\n")
+cat("instituicao:", if (institution_mode == "mantenedora")
+    "CO_MANTENEDORA; fallback CO_IES" else "OpenAlex", "\n")
+if (institution_mode == "mantenedora") cat("CO_IES    :", co_ies_version, "\n")
 for (a in arms) cat("braco", a, ":", arm_dirs[[a]], "\n")
-cat("canonico  :", canon_dir, "\n")
+if (institution_mode == "openalex") cat("canonico  :", canon_dir, "\n")
 cat("saida     :", out_dir, "\n")
 cat("corte     : jw_combo >=", jw_cut, "E jw_lastname >=", jw_cut, "\n")
 cat("DuckDB    :", dbGetQuery(con, "SELECT version() AS v")$v, "\n\n")
@@ -188,17 +224,30 @@ arm_sql <- paste(vapply(arms, function(a) sprintf(
   jw_cut, jw_cut
 ), character(1)), collapse = "\n  UNION ALL\n  ")
 
+arm_institution_fields <- if (institution_mode == "mantenedora") {
+  "capes_msc_start_year, capes_msc_CO_IES,
+   capes_msc_CO_MANTENEDORA, capes_msc_institution_bucket,
+   capes_phd_start_year, capes_phd_CO_IES,
+   capes_phd_CO_MANTENEDORA, capes_phd_institution_bucket,
+   revelio_fullname, revelio_surnames,
+   revelio_msc_start_year, revelio_msc_end_year, revelio_msc_CO_IES,
+   revelio_msc_CO_MANTENEDORA, revelio_msc_institution_bucket,
+   revelio_phd_start_year, revelio_phd_end_year, revelio_phd_CO_IES,
+   revelio_phd_CO_MANTENEDORA, revelio_phd_institution_bucket"
+} else {
+  "capes_msc_start_year, capes_msc_oa_id,
+   capes_phd_start_year, capes_phd_oa_id,
+   revelio_fullname, revelio_surnames,
+   revelio_msc_start_year, revelio_msc_end_year, revelio_msc_oa_id,
+   revelio_phd_start_year, revelio_phd_end_year, revelio_phd_oa_id"
+}
 invisible(dbExecute(con, sprintf(
   "CREATE TEMP TABLE arm_pairs AS
    SELECT arm, person_key, CAST(user_id AS VARCHAR) AS user_id,
           capes_full_name, birth_year, first_name,
-          capes_msc_start_year, capes_msc_oa_id,
-          capes_phd_start_year, capes_phd_oa_id,
-          revelio_fullname, revelio_surnames,
-          revelio_msc_start_year, revelio_msc_end_year, revelio_msc_oa_id,
-          revelio_phd_start_year, revelio_phd_end_year, revelio_phd_oa_id,
+          %s,
           jw_combo, jw_lastname, jw_name, best_variant, key_string
-   FROM (%s)", arm_sql
+   FROM (%s)", arm_institution_fields, arm_sql
 )))
 
 arm_qa <- dbGetQuery(con, "
@@ -245,49 +294,75 @@ if (score_drift != 0L) {
 ### a que esta preenchida e a que forcou a igualdade.
 ####################################################################
 
+uni_institution_fields <- if (institution_mode == "mantenedora") {
+  "max(capes_msc_start_year) AS capes_msc_start_year,
+   max(capes_msc_CO_IES) AS capes_msc_CO_IES,
+   max(capes_msc_CO_MANTENEDORA) AS capes_msc_CO_MANTENEDORA,
+   max(capes_msc_institution_bucket) AS capes_msc_institution_bucket,
+   max(capes_phd_start_year) AS capes_phd_start_year,
+   max(capes_phd_CO_IES) AS capes_phd_CO_IES,
+   max(capes_phd_CO_MANTENEDORA) AS capes_phd_CO_MANTENEDORA,
+   max(capes_phd_institution_bucket) AS capes_phd_institution_bucket,
+   max(revelio_fullname) AS revelio_fullname,
+   max(revelio_surnames) AS revelio_surnames,
+   max(revelio_msc_start_year) AS revelio_msc_start_year,
+   max(revelio_msc_end_year) AS revelio_msc_end_year,
+   max(revelio_msc_CO_IES) AS revelio_msc_CO_IES,
+   max(revelio_msc_CO_MANTENEDORA) AS revelio_msc_CO_MANTENEDORA,
+   max(revelio_msc_institution_bucket) AS revelio_msc_institution_bucket,
+   max(revelio_phd_start_year) AS revelio_phd_start_year,
+   max(revelio_phd_end_year) AS revelio_phd_end_year,
+   max(revelio_phd_CO_IES) AS revelio_phd_CO_IES,
+   max(revelio_phd_CO_MANTENEDORA) AS revelio_phd_CO_MANTENEDORA,
+   max(revelio_phd_institution_bucket) AS revelio_phd_institution_bucket"
+} else {
+  "max(capes_msc_start_year) AS capes_msc_start_year,
+   max(capes_msc_oa_id) AS capes_msc_oa_id,
+   max(capes_phd_start_year) AS capes_phd_start_year,
+   max(capes_phd_oa_id) AS capes_phd_oa_id,
+   max(revelio_fullname) AS revelio_fullname,
+   max(revelio_surnames) AS revelio_surnames,
+   max(revelio_msc_start_year) AS revelio_msc_start_year,
+   max(revelio_msc_end_year) AS revelio_msc_end_year,
+   max(revelio_msc_oa_id) AS revelio_msc_oa_id,
+   max(revelio_phd_start_year) AS revelio_phd_start_year,
+   max(revelio_phd_end_year) AS revelio_phd_end_year,
+   max(revelio_phd_oa_id) AS revelio_phd_oa_id"
+}
 invisible(dbExecute(con, sprintf(
   "CREATE TEMP TABLE uni AS
    SELECT person_key, user_id,
           max(capes_full_name) AS capes_full_name,
           max(birth_year) AS birth_year,
           max(first_name) AS first_name,
-          max(capes_msc_start_year) AS capes_msc_start_year,
-          max(capes_msc_oa_id) AS capes_msc_oa_id,
-          max(capes_phd_start_year) AS capes_phd_start_year,
-          max(capes_phd_oa_id) AS capes_phd_oa_id,
-          max(revelio_fullname) AS revelio_fullname,
-          max(revelio_surnames) AS revelio_surnames,
-          max(revelio_msc_start_year) AS revelio_msc_start_year,
-          max(revelio_msc_end_year) AS revelio_msc_end_year,
-          max(revelio_msc_oa_id) AS revelio_msc_oa_id,
-          max(revelio_phd_start_year) AS revelio_phd_start_year,
-          max(revelio_phd_end_year) AS revelio_phd_end_year,
-          max(revelio_phd_oa_id) AS revelio_phd_oa_id,
+          %s,
           max(jw_combo) AS jw_combo,
           max(jw_lastname) AS jw_lastname,
           max(jw_name) AS jw_name,
           max(best_variant) AS best_variant,
+          bool_or(arm = 'msc') AS in_msc,
+          bool_or(arm = 'phd') AS in_phd,
           CASE WHEN bool_or(arm = 'msc') AND bool_or(arm = 'phd')
                  THEN 'msc+phd'
                WHEN bool_or(arm = 'msc') THEN 'msc'
-               ELSE 'phd' END AS arms,
+               ELSE 'phd' END AS matched_arm,
           max(key_string) FILTER (WHERE arm = 'msc') AS key_string_msc,
           max(key_string) FILTER (WHERE arm = 'phd') AS key_string_phd
    FROM arm_pairs
-   GROUP BY person_key, user_id"
+   GROUP BY person_key, user_id", uni_institution_fields
 )))
 
 dedup_qa <- dbGetQuery(con, "
   SELECT count(*) AS pares,
          count(DISTINCT person_key || '#' || user_id) AS pares_distintos,
-         count_if(arms = 'msc' AND key_string_msc IS NULL) AS msc_sem_chave,
-         count_if(arms = 'phd' AND key_string_phd IS NULL) AS phd_sem_chave,
-         count_if(arms = 'msc+phd'
+         count_if(matched_arm = 'msc' AND key_string_msc IS NULL) AS msc_sem_chave,
+         count_if(matched_arm = 'phd' AND key_string_phd IS NULL) AS phd_sem_chave,
+         count_if(matched_arm = 'msc+phd'
                   AND (key_string_msc IS NULL
                        OR key_string_phd IS NULL)) AS ambos_sem_chave,
-         count_if(arms = 'msc' AND key_string_phd IS NOT NULL)
+         count_if(matched_arm = 'msc' AND key_string_phd IS NOT NULL)
            AS msc_com_chave_phd,
-         count_if(arms = 'phd' AND key_string_msc IS NOT NULL)
+         count_if(matched_arm = 'phd' AND key_string_msc IS NOT NULL)
            AS phd_com_chave_msc
   FROM uni")
 stopifnot(
@@ -304,36 +379,76 @@ stopifnot(
 ### bracos. Aqui eles sao refeitos sobre a uniao.
 ####################################################################
 
-invisible(dbExecute(con, sprintf(
-  "CREATE TEMP TABLE crosswalk AS
-   SELECT u.person_key, u.capes_full_name, u.birth_year, u.first_name,
-          u.capes_msc_start_year, u.capes_msc_oa_id,
-          u.capes_phd_start_year, u.capes_phd_oa_id,
-          u.user_id, u.revelio_fullname,
-          u.revelio_msc_start_year, u.revelio_msc_end_year,
-          u.revelio_msc_oa_id,
-          u.revelio_phd_start_year, u.revelio_phd_end_year,
-          u.revelio_phd_oa_id,
+crosswalk_institution_fields <- if (institution_mode == "mantenedora") {
+  "u.capes_msc_start_year, u.capes_msc_CO_IES,
+   u.capes_msc_CO_MANTENEDORA, u.capes_msc_institution_bucket,
+   u.capes_phd_start_year, u.capes_phd_CO_IES,
+   u.capes_phd_CO_MANTENEDORA, u.capes_phd_institution_bucket,
+   u.user_id, u.revelio_fullname,
+   u.revelio_msc_start_year, u.revelio_msc_end_year,
+   u.revelio_msc_CO_IES, u.revelio_msc_CO_MANTENEDORA,
+   u.revelio_msc_institution_bucket,
+   u.revelio_phd_start_year, u.revelio_phd_end_year,
+   u.revelio_phd_CO_IES, u.revelio_phd_CO_MANTENEDORA,
+   u.revelio_phd_institution_bucket"
+} else {
+  "u.capes_msc_start_year, u.capes_msc_oa_id,
+   u.capes_phd_start_year, u.capes_phd_oa_id,
+   u.user_id, u.revelio_fullname,
+   u.revelio_msc_start_year, u.revelio_msc_end_year,
+   u.revelio_msc_oa_id,
+   u.revelio_phd_start_year, u.revelio_phd_end_year,
+   u.revelio_phd_oa_id"
+}
+crosswalk_common <- sprintf(
+  "SELECT u.person_key, u.capes_full_name, u.birth_year, u.first_name,
+          %s,
           u.jw_combo, u.jw_lastname, u.jw_name, u.best_variant,
           u.revelio_surnames,
-          u.arms, u.key_string_msc, u.key_string_phd,
-          (c.person_key IS NOT NULL) AS in_canonical,
+          u.in_msc, u.in_phd, u.matched_arm,
+          u.key_string_msc, u.key_string_phd",
+  crosswalk_institution_fields)
+crosswalk_ranks <- "
           dense_rank() OVER (PARTITION BY u.person_key
                              ORDER BY u.jw_combo DESC) AS user_rank,
           count(*) OVER (PARTITION BY u.person_key) AS n_users,
           dense_rank() OVER (PARTITION BY u.user_id
                              ORDER BY u.jw_combo DESC) AS person_rank,
-          count(*) OVER (PARTITION BY u.user_id) AS n_persons
-   FROM uni u
-   LEFT JOIN (
-     SELECT DISTINCT person_key, CAST(user_id AS VARCHAR) AS user_id
-     FROM read_parquet(%1$s)
-     WHERE jw_combo >= %2$.17g AND jw_lastname >= %2$.17g) c
-     USING (person_key, user_id)",
-  qp(canon_file), jw_cut
-)))
+          count(*) OVER (PARTITION BY u.user_id) AS n_persons"
+if (institution_mode == "mantenedora") {
+  invisible(dbExecute(con, paste0(
+    "CREATE TEMP TABLE crosswalk AS ", crosswalk_common, ",",
+    crosswalk_ranks, " FROM uni u")))
+} else {
+  invisible(dbExecute(con, sprintf(
+    "CREATE TEMP TABLE crosswalk AS %s,
+            (c.person_key IS NOT NULL) AS in_canonical,
+            %s
+     FROM uni u
+     LEFT JOIN (
+       SELECT DISTINCT person_key, CAST(user_id AS VARCHAR) AS user_id
+       FROM read_parquet(%s)
+       WHERE jw_combo >= %.17g AND jw_lastname >= %.17g) c
+       USING (person_key, user_id)",
+    crosswalk_common, crosswalk_ranks, qp(canon_file), jw_cut, jw_cut)))
+}
 
-xw_qa <- dbGetQuery(con, sprintf("
+xw_qa_sql <- if (institution_mode == "mantenedora") "
+  SELECT count(*) AS pares,
+         count(DISTINCT person_key) AS pessoas,
+         count(DISTINCT user_id) AS users,
+         NULL::BIGINT AS pares_no_canonico,
+         NULL::BIGINT AS pares_novos,
+         NULL::BIGINT AS pessoas_com_par_novo,
+         count_if(matched_arm = 'msc') AS so_msc,
+         count_if(matched_arm = 'phd') AS so_phd,
+         count_if(matched_arm = 'msc+phd') AS ambos,
+         count_if(jw_combo < %.17g OR jw_lastname < %.17g) AS bad_gate,
+         max(n_users) AS max_users_por_pessoa,
+         max(n_persons) AS max_pessoas_por_user,
+         avg(n_users) AS media_users_por_pessoa,
+         avg(n_persons) AS media_pessoas_por_user
+  FROM crosswalk" else "
   SELECT count(*) AS pares,
          count(DISTINCT person_key) AS pessoas,
          count(DISTINCT user_id) AS users,
@@ -341,15 +456,16 @@ xw_qa <- dbGetQuery(con, sprintf("
          count_if(NOT in_canonical) AS pares_novos,
          count(DISTINCT person_key) FILTER (WHERE NOT in_canonical)
            AS pessoas_com_par_novo,
-         count_if(arms = 'msc') AS so_msc,
-         count_if(arms = 'phd') AS so_phd,
-         count_if(arms = 'msc+phd') AS ambos,
+         count_if(matched_arm = 'msc') AS so_msc,
+         count_if(matched_arm = 'phd') AS so_phd,
+         count_if(matched_arm = 'msc+phd') AS ambos,
          count_if(jw_combo < %1$.17g OR jw_lastname < %1$.17g) AS bad_gate,
          max(n_users) AS max_users_por_pessoa,
          max(n_persons) AS max_pessoas_por_user,
          avg(n_users) AS media_users_por_pessoa,
          avg(n_persons) AS media_pessoas_por_user
-  FROM crosswalk", jw_cut))
+  FROM crosswalk"
+xw_qa <- dbGetQuery(con, sprintf(xw_qa_sql, jw_cut, jw_cut))
 stopifnot(xw_qa$bad_gate == 0L)
 
 # A CONTENCAO DO CANONICO, e o que dela NAO vale.
@@ -369,7 +485,8 @@ stopifnot(xw_qa$bad_gate == 0L)
 # coincidencia. Eles ficam fora da uniao, sao CONTADOS aqui e saem no
 # resumo e no relatorio. Nao filtre esse balde em silencio: se voce
 # quer o canonico junto, e uma uniao a mais, feita de proposito.
-canon_qa <- dbGetQuery(con, sprintf("
+if (institution_mode == "openalex") {
+  canon_qa <- dbGetQuery(con, sprintf("
   WITH canon AS (
     SELECT DISTINCT person_key, CAST(user_id AS VARCHAR) AS user_id,
            (capes_msc_start_year IS NOT NULL
@@ -393,23 +510,28 @@ canon_qa <- dbGetQuery(con, sprintf("
                             WHERE x.person_key = c.person_key
                               AND x.user_id = c.user_id))
            AS canonicos_fora_por_falta_de_id",
-  qp(canon_file), jw_cut))
-if (!is.na(exp_canon_pairs) && canon_qa$canonicos != exp_canon_pairs) {
-  warning("Canonico conservador ", canon_qa$canonicos, " != ",
-          exp_canon_pairs, " medido.")
+    qp(canon_file), jw_cut))
+  if (!is.na(exp_canon_pairs) && canon_qa$canonicos != exp_canon_pairs) {
+    warning("Canonico conservador ", canon_qa$canonicos, " != ",
+            exp_canon_pairs, " medido.")
+  }
+  if (canon_qa$canonicos_perdidos != 0L) {
+    stop(canon_qa$canonicos_perdidos,
+         " par(es) do canonico conservador COM diploma resolvido nao ",
+         "estao na uniao. A edicao da chave quebrou algo.")
+  }
+  cat(sprintf(
+    "[OK] a uniao contem os %d pares canonicos com diploma resolvido\n",
+    canon_qa$canonicos - canon_qa$canonicos_sem_instituicao))
+  cat(sprintf(
+    "     %d par(es) canonico(s) SEM instituicao resolvida ficam fora\n\n",
+    canon_qa$canonicos_fora_por_falta_de_id))
+} else {
+  canon_qa <- data.frame(
+    canonicos = NA_integer_, canonicos_sem_instituicao = NA_integer_,
+    canonicos_perdidos = NA_integer_,
+    canonicos_fora_por_falta_de_id = NA_integer_)
 }
-if (canon_qa$canonicos_perdidos != 0L) {
-  stop(canon_qa$canonicos_perdidos, " par(es) do canonico conservador COM ",
-       "diploma resolvido nao estao na uniao. Cada braco tinha de ser ",
-       "superconjunto do canonico no seu diploma -- a edicao da chave ",
-       "quebrou algo.")
-}
-cat(sprintf(
-  "[OK] a uniao contem os %d pares canonicos com diploma resolvido\n",
-  canon_qa$canonicos - canon_qa$canonicos_sem_instituicao))
-cat(sprintf(
-  "     %d par(es) canonico(s) SEM instituicao resolvida ficam fora\n\n",
-  canon_qa$canonicos_fora_por_falta_de_id))
 
 ####################################################################
 ### Etapa D -- o placebo da uniao
@@ -520,6 +642,12 @@ resumo <- data.frame(
   ),
   stringsAsFactors = FALSE
 )
+if (institution_mode == "mantenedora") {
+  resumo <- resumo[!resumo$metrica %in% c(
+    "canonico_pares", "canonico_sem_instituicao_fora_da_uniao",
+    "pares_no_canonico", "pares_novos", "pessoas_com_par_novo"
+  ), , drop = FALSE]
+}
 write.csv(resumo, paste0(sum_path, ".part"), row.names = FALSE)
 if (file.exists(sum_path)) unlink(sum_path)
 if (!file.rename(paste0(sum_path, ".part"), sum_path)) {
@@ -541,22 +669,23 @@ print(data.frame(
   stringsAsFactors = FALSE
 ), row.names = FALSE)
 
-cat("\n=========== O QUE E NOVO ===========\n")
-print(data.frame(
-  situacao = c("ja estava no canonico", "novo na uniao"),
-  pares = c(xw_qa$pares_no_canonico, xw_qa$pares_novos),
-  pct = round(100 * c(xw_qa$pares_no_canonico, xw_qa$pares_novos) /
-                xw_qa$pares, 1),
-  stringsAsFactors = FALSE
-), row.names = FALSE)
-cat(sprintf("pessoas CAPES que ganharam ao menos um par novo: %d\n",
-            xw_qa$pessoas_com_par_novo))
-cat(sprintf(
-  "\n%d par(es) do canonico ficam FORA da uniao: nenhum diploma com\n",
-  canon_qa$canonicos_fora_por_falta_de_id))
-cat("instituicao resolvida, chave = primeiro nome + ano. E a mesma\n")
-cat("configuracao que o placebo do _noinst reprovou. Contados aqui de\n")
-cat("proposito -- decida se quer o canonico unido tambem, e diga.\n")
+if (institution_mode == "openalex") {
+  cat("\n=========== O QUE E NOVO ===========\n")
+  print(data.frame(
+    situacao = c("ja estava no canonico", "novo na uniao"),
+    pares = c(xw_qa$pares_no_canonico, xw_qa$pares_novos),
+    pct = round(100 * c(xw_qa$pares_no_canonico, xw_qa$pares_novos) /
+                  xw_qa$pares, 1),
+    stringsAsFactors = FALSE
+  ), row.names = FALSE)
+  cat(sprintf("pessoas CAPES que ganharam ao menos um par novo: %d\n",
+              xw_qa$pessoas_com_par_novo))
+  cat(sprintf(
+    "\n%d par(es) do canonico ficam FORA da uniao: nenhum diploma com\n",
+    canon_qa$canonicos_fora_por_falta_de_id))
+  cat("instituicao resolvida, chave = primeiro nome + ano. E a mesma\n")
+  cat("configuracao que o placebo do _noinst reprovou.\n")
+}
 
 cat("\n=========== PLACEBO E EXCEDENTE DA UNIAO ===========\n")
 print(placebo, row.names = FALSE)
@@ -580,7 +709,7 @@ if (!identical(guard_before, guard_after)) {
   stop("Uma entrada mudou durante a uniao. Isso nunca deveria acontecer ",
        "-- ver a guarda no topo.")
 }
-cat("[OK] canonico e os dois bracos intactos (tamanho e mtime)\n")
+cat("[OK] entradas intactas (tamanho e mtime)\n")
 
 cat("\nTabela de CANDIDATOS, nao mapa 1:1 -- limitacao 3. Trate\n")
 cat("n_users e n_persons antes de qualquer join. Contem nome civil\n")

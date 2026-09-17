@@ -34,25 +34,28 @@ repo_root <- Sys.getenv(
 cohort_dir <- file.path(obmep_root, "Data/intermediate/revelio_br_cohort")
 
 country_path <- file.path(
-  cohort_dir, "obmep_br_cohort_user_ids_degree_duration.parquet")
+  cohort_dir, "obmep_br_cohort_user_ids.parquet")
 name_path <- file.path(cohort_dir, "obmep_br_name_cohort_user_ids.parquet")
-canonical_union_path <- file.path(cohort_dir, "obmep_candidates_step_1.parquet")
+canonical_union_path <- file.path(
+  cohort_dir, "archive/legacy_cohorts/pre_degree_duration_20260916",
+  "obmep_candidates_step_1.parquet")
 canonical_education_dir <- file.path(
-  cohort_dir, "obmep_candidates_step_1_education")
+  cohort_dir, "archive/legacy_cohorts/pre_degree_duration_20260916",
+  "obmep_candidates_step_1_education")
 
 union_path <- file.path(
-  cohort_dir, "obmep_candidates_step_1_degree_duration.parquet")
+  cohort_dir, "obmep_candidates_step_1.parquet")
 education_dir <- file.path(
-  cohort_dir, "obmep_candidates_step_1_degree_duration_education")
+  cohort_dir, "obmep_candidates_step_1_education")
 sample_path <- file.path(
   cohort_dir,
-  "obmep_candidates_step_1_degree_duration_education_sample_100.csv")
+  "obmep_candidates_step_1_education_sample_100.csv")
 report_path <- file.path(
   cohort_dir,
-  "obmep_candidates_step_1_degree_duration_education_report.json")
+  "obmep_candidates_step_1_education_report.json")
 ledger_path <- file.path(
   cohort_dir,
-  "obmep_candidates_step_1_degree_duration_education_scan_ledger.csv")
+  "obmep_candidates_step_1_education_scan_ledger.csv")
 
 patterns_file <- file.path(
   repo_root, "prep/building_external_data/br_degree_patterns.R")

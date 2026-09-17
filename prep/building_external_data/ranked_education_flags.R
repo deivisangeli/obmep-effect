@@ -1,7 +1,7 @@
 # Local, offline preparation. Builds Brazilian-CWUR and Shanghai education
 # flags for the refreshed degree-duration cohort. It never changes the legacy
 # RUF, Shanghai, hierarchy, selection, or employer products.
-# Run after global_oa_degree_duration_hierarchy.R from the repository root.
+# Run after build_university_raw_oa_co_ies_crosswalk.R from the repository root.
 library(DBI)
 library(duckdb)
 library(jsonlite)
@@ -9,37 +9,41 @@ options(stringsAsFactors=FALSE)
 
 root <- Sys.getenv('OBMEP_ROOT','C:/Users/megaj/Globtalent Dropbox/OBMEP')
 coh <- file.path(root,'Data/intermediate/revelio_br_cohort')
-global_dir <- file.path(coh,'global_oa_hierarchy_degree_duration')
-education_glob <- gsub('\\\\','/',file.path(global_dir,'education_parts','*.parquet'))
+global_dir <- file.path(coh,'global_oa_hierarchy')
+identity_dir <- file.path(coh,'university_identity_crosswalk')
+education_glob <- gsub('\\\\','/',file.path(identity_dir,'education_row_identity','*.parquet'))
 snapshot <- 'C:/Users/megaj/Globtalent Dropbox/GTAllocation/Data/external/oa_snapshot/data/institutions'
 snapshot_paths <- sort(list.files(snapshot,pattern='[.]gz$',recursive=TRUE,full.names=TRUE))
 cwur_path <- file.path(root,'Data/intermediate/cwur_ranking/cwur_openalex_2026.parquet')
 shanghai_path <- file.path(root,'Data/intermediate/shanghai_ranking/shanghai_ranking_oa_parents.parquet')
 patterns_path <- Sys.getenv('OBMEP_DEGREE_PATTERNS','prep/building_external_data/br_degree_patterns.R')
-script_path <- 'prep/building_external_data/degree_duration_ranked_education_flags.R'
+script_path <- 'prep/building_external_data/ranked_education_flags.R'
 source(patterns_path)
 
 resume_run <- Sys.getenv('OBMEP_DURATION_RANKED_FLAG_RESUME_RUN','')
 stopifnot(!nzchar(resume_run) || grepl('^[0-9]{8}T[0-9]{6}$',resume_run))
 run_id <- if(nzchar(resume_run)) resume_run else format(Sys.time(),'%Y%m%dT%H%M%S')
-stage_dir <- file.path(coh,'.ranked_flags_degree_duration_staging',run_id)
-backup_dir <- file.path(coh,'ranked_flags_degree_duration_backups',run_id)
+stage_dir <- file.path(coh,'.ranked_flags_staging',run_id)
+backup_dir <- file.path(coh,'ranked_flags_backups',run_id)
 dir.create(stage_dir,recursive=TRUE,showWarnings=FALSE)
 
 dest <- c(
- cwur=file.path(coh,'obmep_candidates_step_1_degree_duration_cwur.parquet'),
- shanghai=file.path(coh,'obmep_candidates_step_1_degree_duration_shanghai.parquet'),
- report=file.path(coh,'ranked_education_flags_degree_duration_report.json'),
+ cwur=file.path(coh,'obmep_candidates_step_1_cwur.parquet'),
+ shanghai=file.path(coh,'obmep_candidates_step_1_shanghai.parquet'),
+ report=file.path(coh,'ranked_education_flags_report.json'),
  parent_map=file.path(global_dir,'global_oa_degree_duration_parent_map.parquet'),
  decisions=file.path(global_dir,'global_oa_degree_duration_family_parent_adjusted_decisions.parquet'),
  ranked_catalog=file.path(global_dir,'global_oa_degree_duration_ranked_parent_catalog.parquet'))
 stage <- file.path(stage_dir,basename(dest)); names(stage) <- names(dest)
 
-education_paths <- sort(list.files(file.path(global_dir,'education_parts'),pattern='[.]parquet$',full.names=TRUE))
+education_paths <- sort(list.files(file.path(identity_dir,'education_row_identity'),pattern='[.]parquet$',full.names=TRUE))
 hierarchy_manifest <- file.path(global_dir,'implementation_manifest.rds')
+identity_report <- file.path(identity_dir,'university_raw_oa_id_co_ies_report.json')
 stopifnot(length(education_paths)==30L,length(snapshot_paths)>0,
- all(file.exists(c(cwur_path,shanghai_path,patterns_path,hierarchy_manifest))))
-input_paths <- c(education_paths,snapshot_paths,cwur_path,shanghai_path,patterns_path,hierarchy_manifest)
+ all(file.exists(c(cwur_path,shanghai_path,patterns_path,hierarchy_manifest,
+                   identity_report))))
+input_paths <- c(education_paths,snapshot_paths,cwur_path,shanghai_path,
+                 patterns_path,hierarchy_manifest,identity_report)
 input_md5 <- unname(tools::md5sum(input_paths)); stopifnot(!anyNA(input_md5))
 input_manifest <- file.path(stage_dir,'input_manifest.rds')
 input_manifest_value <- data.frame(path=input_paths,md5=input_md5)

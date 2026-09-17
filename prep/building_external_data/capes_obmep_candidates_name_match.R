@@ -167,12 +167,29 @@ rev_dir <- file.path(obmep_root, "Data/intermediate/revelio_br_cohort")
 # Population routing is deliberately an enum rather than independent path
 # overrides: the selected-profile file and education history must always come
 # from the same cohort. The legacy behavior remains the default.
-match_cohort <- Sys.getenv("OBMEP_MATCH_COHORT", unset = "legacy")
+match_cohort <- Sys.getenv("OBMEP_MATCH_COHORT", unset = "degree_duration")
 if (!match_cohort %in% c("legacy", "degree_duration")) {
   stop("OBMEP_MATCH_COHORT = '", match_cohort,
        "' does not exist. Use legacy or degree_duration.")
 }
 cohort_tag <- if (match_cohort == "degree_duration") "_degree_duration" else ""
+institution_mode <- Sys.getenv("OBMEP_MATCH_INST_KEY", unset = "openalex")
+if (!institution_mode %in% c("openalex", "mantenedora")) {
+  stop("OBMEP_MATCH_INST_KEY = '", institution_mode,
+       "' does not exist. Use openalex or mantenedora.")
+}
+if (institution_mode == "mantenedora" && match_cohort != "degree_duration") {
+  stop("OBMEP_MATCH_INST_KEY=mantenedora is defined only for the latest ",
+       "degree_duration cohort.")
+}
+co_ies_version <- Sys.getenv("OBMEP_MATCH_CO_IES_VERSION", unset = "base")
+if (!co_ies_version %in% c("base", "regex_v1")) {
+  stop("OBMEP_MATCH_CO_IES_VERSION = '", co_ies_version,
+       "' does not exist. Use base or regex_v1.")
+}
+if (institution_mode == "openalex" && co_ies_version != "base") {
+  stop("OBMEP_MATCH_CO_IES_VERSION applies only to maintainer matching.")
+}
 # A VARIANTE. Ligado (padrao) = a chave de 7 posicoes descrita acima.
 # Desligado = as posicoes 6 e 7, os openalex_id, viram o literal 'NA'
 # nos dois lados, exatamente como key_end_years ja faz com as posicoes
@@ -180,6 +197,10 @@ cohort_tag <- if (match_cohort == "degree_duration") "_degree_duration" else ""
 #
 # NAO e um sucessor do produto canonico: e uma MEDICAO. Ver nota 9.
 key_oa_ids <- Sys.getenv("OBMEP_MATCH_KEY_OA", unset = "1") != "0"
+if (institution_mode == "mantenedora" && !key_oa_ids) {
+  stop("OBMEP_MATCH_KEY_OA=0 is incompatible with the maintainer mode. ",
+       "The maintainer bucket is the institution evidence in this variant.")
+}
 
 # O BRACO. "both" (padrao) = a chave canonica, em que quem tem os dois
 # diplomas precisa que os DOIS concordem. "msc" apaga as posicoes do
@@ -196,28 +217,50 @@ if (!match_arm %in% c("both", "msc", "phd")) {
        "Use both, msc ou phd.")
 }
 arm_tag <- switch(match_arm, both = "", msc = "_msc", phd = "_phd")
+if (institution_mode == "mantenedora" && match_arm == "both") {
+  stop("Maintainer matching is arm-specific. Set OBMEP_MATCH_ARM to msc or phd.")
+}
 
-variant_tag <- paste0(cohort_tag, if (key_oa_ids) "" else "_noinst", arm_tag)
+institution_tag <- if (institution_mode == "mantenedora") {
+  paste0("_mantenedora",
+         if (co_ies_version == "regex_v1") "_regex_v1" else "")
+} else ""
+variant_tag <- paste0(
+  cohort_tag,
+  if (institution_mode == "openalex" && !key_oa_ids) "_noinst" else "",
+  institution_tag, arm_tag
+)
 
 out_dir <- file.path(capes_dir, paste0("capes_obmep_match", variant_tag))
 
-capes_path <- file.path(
-  capes_dir, "capes_masters_doctorates_born_1988plus_2004_2024.csv"
-)
+capes_path <- file.path(capes_dir, if (institution_mode == "mantenedora")
+  "capes_masters_doctorates_born_1988plus_2004_2024_emec_mantenedora.parquet" else
+  "capes_masters_doctorates_born_1988plus_2004_2024.csv")
 xw_path <- file.path(capes_dir, "capes_openalex_br_crosswalk.parquet")
 manual_path <- file.path(
   capes_dir,
   "capes_openalex_manual/capes_openalex_manual_br_crosswalk.parquet"
 )
-edu_dir <- file.path(
-  rev_dir, if (match_cohort == "degree_duration")
-    "obmep_candidates_step_1_degree_duration_education" else
-    "obmep_candidates_step_1_education")
+edu_dir <- if (institution_mode == "mantenedora") {
+  file.path(
+    rev_dir,
+    if (co_ies_version == "regex_v1") "university_identity_crosswalk" else
+      "emec_hierarchy",
+    if (co_ies_version == "regex_v1") "education_row_identity" else
+      "education_parts")
+} else {
+  file.path(
+    rev_dir, if (match_cohort == "degree_duration")
+      "obmep_candidates_step_1_degree_duration_education" else
+      "obmep_candidates_step_1_education")
+}
 sel_path <- file.path(
   rev_dir, if (match_cohort == "degree_duration")
-    "obmep_candidates_selected_degree_duration.parquet" else
-    "obmep_candidates_selected.parquet")
+    "obmep_candidates_selected.parquet" else
+    "archive/legacy_cohorts/pre_degree_duration_20260916/obmep_candidates_selected.parquet")
 map_path <- file.path(rev_dir, "rsid_openalex_safe_map.parquet")
+census_path <- file.path(
+  obmep_root, "Data/raw/Censo Superior/MICRODADOS_ED_SUP_IES_2024.CSV")
 
 script_arg <- grep("^--file=", commandArgs(), value = TRUE)
 patterns_path <- if (length(script_arg) == 1L) {
@@ -256,8 +299,8 @@ cache_dir <- file.path(tmp_dir, paste0("v1_b128", variant_tag))
 # divergencia estrutural aborta, divergencia de contagem avisa.
 exp_capes_rows <- 733879L
 exp_capes_institutions <- 915L
-exp_capes_inst_with_oa <- 843L
-exp_capes_rows_with_oa <- 730667L
+exp_capes_inst_with_oa <- if (institution_mode == "openalex") 843L else NA_integer_
+exp_capes_rows_with_oa <- if (institution_mode == "openalex") 730667L else NA_integer_
 if (match_cohort == "degree_duration") {
   exp_edu_rows <- 19710307L
   exp_edu_users <- 8901904L
@@ -284,7 +327,30 @@ exp_users_no_surname <- if (match_cohort == "degree_duration") {
 # As tres regras no corte 0,90. jw_name nao reproduz exatamente os
 # 172.269 do piloto anterior porque a variante "nome inteiro" agora e
 # a juncao dos TOKENS, sem as particulas; a diferenca e de 279 pares.
-if (match_cohort == "degree_duration") {
+if (institution_mode == "mantenedora" && co_ies_version == "base") {
+  exp_pairs_compared <- switch(
+    match_arm, both = NA_integer_, msc = 986343L, phd = 148869L)
+  exp_combo_pairs <- switch(
+    match_arm, both = NA_integer_, msc = 153740L, phd = 39731L)
+  exp_combo_persons <- switch(
+    match_arm, both = NA_integer_, msc = 135353L, phd = 36108L)
+  exp_strict_pairs <- switch(
+    match_arm, both = NA_integer_, msc = 144987L, phd = 37951L)
+  exp_legacy_pairs <- switch(
+    match_arm, both = NA_integer_, msc = 269631L, phd = 53615L)
+} else if (institution_mode == "mantenedora") {
+  # Measured in the first isolated regex-v1 run on 2026-09-16.
+  exp_pairs_compared <- switch(
+    match_arm, both = NA_integer_, msc = 1128716L, phd = 173488L)
+  exp_combo_pairs <- switch(
+    match_arm, both = NA_integer_, msc = 173705L, phd = 45506L)
+  exp_combo_persons <- switch(
+    match_arm, both = NA_integer_, msc = 152428L, phd = 41225L)
+  exp_strict_pairs <- switch(
+    match_arm, both = NA_integer_, msc = 163699L, phd = 43393L)
+  exp_legacy_pairs <- switch(
+    match_arm, both = NA_integer_, msc = 306100L, phd = 61626L)
+} else if (match_cohort == "degree_duration") {
   exp_pairs_compared <- switch(
     match_arm, both = 975226L, msc = 1131720L, phd = 169797L)
   exp_combo_pairs <- switch(
@@ -323,6 +389,13 @@ expected_capes_columns <- c(
   "person_id", "full_name", "birth_year", "course_code", "course_name",
   "institution", "course_area", "course_type", "course_start_year"
 )
+expected_capes_mantenedora_columns <- c(
+  "person_key", "institution_key", "person_id", "full_name", "birth_year",
+  "course_code", "course_name", "institution", "course_area", "course_type",
+  "course_start_year", "CO_IES", "co_ies_source", "co_ies_candidate_count",
+  "CO_MANTENEDORA", "no_mantenedora", "census_ies_name",
+  "institution_bucket", "institution_bucket_source"
+)
 expected_edu_columns <- c(
   "user_id", "university_raw", "university_name", "rsid", "degree_raw",
   "degree", "field_raw", "field", "university_country", "description",
@@ -341,11 +414,13 @@ if (key_end_years) {
        "NM_SITUACAO_DISCENTE = 'TITULADO' antes de ligar isto.")
 }
 
-stopifnot(
-  file.exists(capes_path), file.exists(xw_path), file.exists(manual_path),
-  file.exists(sel_path), file.exists(map_path), file.exists(patterns_path),
-  dir.exists(edu_dir)
-)
+stopifnot(file.exists(capes_path), file.exists(sel_path),
+          file.exists(patterns_path), dir.exists(edu_dir))
+if (institution_mode == "openalex") {
+  stopifnot(file.exists(xw_path), file.exists(manual_path), file.exists(map_path))
+} else {
+  stopifnot(file.exists(census_path))
+}
 
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 dir.create(file.path(out_dir, "pairs"), recursive = TRUE, showWarnings = FALSE)
@@ -360,7 +435,7 @@ canon_dir <- file.path(capes_dir, paste0("capes_obmep_match", cohort_tag))
 canon_file <- file.path(canon_dir, "capes_obmep_match_candidates.parquet")
 # Qualquer rodada que NAO seja a canonica e uma variante, e nenhuma
 # variante pode escrever no produto canonico por nenhum caminho.
-is_variant <- !key_oa_ids || match_arm != "both"
+is_variant <- institution_mode != "openalex" || !key_oa_ids || match_arm != "both"
 legacy_canon_file <- file.path(
   capes_dir, "capes_obmep_match", "capes_obmep_match_candidates.parquet")
 guarded_files <- unique(c(
@@ -408,6 +483,7 @@ manual_sql <- qp(manual_path)
 edu_sql <- qp(file.path(edu_dir, "*"))
 sel_sql <- qp(sel_path)
 map_sql <- qp(map_path)
+census_sql <- qp(census_path)
 
 cat("CAPES -> candidatos OBMEP selecionados: piloto de pareamento\n")
 cat("coorte      :", match_cohort, "\n")
@@ -416,8 +492,15 @@ cat("educacao    :", edu_dir, "\n")
 cat("selecionados:", sel_path, "\n")
 cat("saida       :", out_dir, "\n")
 cat("buckets     :", n_buckets, " corte JW >=", jw_cut, "\n")
-cat("variante    :", if (key_oa_ids) "canonica (openalex_id na chave)" else
-    "SEM openalex_id -- MEDICAO, nao tabela de pareamento", "\n")
+cat("instituicao :", if (institution_mode == "mantenedora")
+    "CO_MANTENEDORA; fallback CO_IES" else "OpenAlex", "\n")
+if (institution_mode == "mantenedora") {
+  cat("CO_IES      :", co_ies_version, "\n")
+}
+cat("variante    :", if (institution_mode == "mantenedora")
+    paste0("braco ", match_arm, " com mantenedora na chave") else
+    if (key_oa_ids) "canonica (openalex_id na chave)" else
+      "SEM openalex_id -- MEDICAO, nao tabela de pareamento", "\n")
 cat("DuckDB      :", dbGetQuery(con, "SELECT version() AS v")$v, "\n\n")
 
 ####################################################################
@@ -522,31 +605,54 @@ cat("     7 variantes, ordem dos tokens preservada\n\n")
 ### Etapa A -- lado CAPES, uma linha por pessoa
 ####################################################################
 
-capes_columns <- names(dbGetQuery(con, sprintf(
-  "SELECT * FROM read_csv_auto(%s, header = true, all_varchar = true) LIMIT 0",
-  capes_sql
-)))
-stopifnot(identical(capes_columns, expected_capes_columns))
-
-# person_id so existe a partir de 2013. As linhas legadas sao
-# agrupadas por nome completo aparado mais ano de nascimento, como o
-# script 24 documenta.
-invisible(dbExecute(con, sprintf(
-  "CREATE TEMP TABLE capes_rows AS
-   SELECT
-     coalesce(nullif(trim(person_id), ''),
-              trim(full_name) || '|' || trim(birth_year)) AS person_key,
-     trim(full_name)  AS full_name,
-     trim(birth_year) AS birth_year,
-     trim(institution) AS institution,
-     trim(course_code) AS course_code,
-     trim(course_type) AS course_type,
-     CASE WHEN trim(course_type) LIKE 'MESTRADO%%'  THEN 'master'
-          WHEN trim(course_type) LIKE 'DOUTORADO%%' THEN 'phd' END AS lvl,
-     TRY_CAST(trim(course_start_year) AS INTEGER) AS course_start_year
-   FROM read_csv_auto(%s, header = true, all_varchar = true)",
-  capes_sql
-)))
+if (institution_mode == "mantenedora") {
+  capes_columns <- names(dbGetQuery(con, sprintf(
+    "SELECT * FROM read_parquet(%s) LIMIT 0", capes_sql)))
+  stopifnot(identical(capes_columns, expected_capes_mantenedora_columns))
+  invisible(dbExecute(con, sprintf(
+    "CREATE TEMP TABLE capes_rows AS
+     SELECT
+       coalesce(nullif(trim(person_id), ''),
+                trim(full_name) || '|' || CAST(birth_year AS VARCHAR))
+         AS person_key,
+       trim(full_name) AS full_name,
+       CAST(birth_year AS VARCHAR) AS birth_year,
+       trim(institution) AS institution,
+       trim(course_code) AS course_code,
+       trim(course_type) AS course_type,
+       CASE WHEN trim(course_type) LIKE 'MESTRADO%%'  THEN 'master'
+            WHEN trim(course_type) LIKE 'DOUTORADO%%' THEN 'phd' END AS lvl,
+       TRY_CAST(course_start_year AS INTEGER) AS course_start_year,
+       CO_IES AS co_ies, CO_MANTENEDORA AS co_mantenedora,
+       institution_bucket
+     FROM read_parquet(%s)", capes_sql)))
+} else {
+  capes_columns <- names(dbGetQuery(con, sprintf(
+    "SELECT * FROM read_csv_auto(%s, header = true, all_varchar = true) LIMIT 0",
+    capes_sql
+  )))
+  stopifnot(identical(capes_columns, expected_capes_columns))
+  # person_id so existe a partir de 2013. As linhas legadas sao
+  # agrupadas por nome completo aparado mais ano de nascimento.
+  invisible(dbExecute(con, sprintf(
+    "CREATE TEMP TABLE capes_rows AS
+     SELECT
+       coalesce(nullif(trim(person_id), ''),
+                trim(full_name) || '|' || trim(birth_year)) AS person_key,
+       trim(full_name)  AS full_name,
+       trim(birth_year) AS birth_year,
+       trim(institution) AS institution,
+       trim(course_code) AS course_code,
+       trim(course_type) AS course_type,
+       CASE WHEN trim(course_type) LIKE 'MESTRADO%%'  THEN 'master'
+            WHEN trim(course_type) LIKE 'DOUTORADO%%' THEN 'phd' END AS lvl,
+       TRY_CAST(trim(course_start_year) AS INTEGER) AS course_start_year,
+       NULL::BIGINT AS co_ies, NULL::BIGINT AS co_mantenedora,
+       NULL::VARCHAR AS institution_bucket
+     FROM read_csv_auto(%s, header = true, all_varchar = true)",
+    capes_sql
+  )))
+}
 
 capes_qa <- dbGetQuery(con, "
   SELECT count(*) AS rows,
@@ -572,68 +678,84 @@ if (capes_qa$institutions != exp_capes_institutions) {
           exp_capes_institutions, " medido.")
 }
 
-# instituicao -> openalex_id, em tres bracos, UM id por instituicao.
-# NAO juntar o crosswalk do script 25 sem resolver n_candidates: aquele
-# arquivo e uma tabela de CANDIDATOS e multiplicaria linhas.
-invisible(dbExecute(con, sprintf(
-  "CREATE TEMP TABLE capes_oa AS
-   SELECT capes_institution, openalex_id, 'jw_unique' AS oa_source
-     FROM read_parquet(%1$s) WHERE n_candidates = 1
-   UNION ALL
-   SELECT capes_institution, openalex_id, 'jw_rank1'
-     FROM (SELECT capes_institution, openalex_id,
-                  count(*) OVER (PARTITION BY capes_institution) AS n_tied
-           FROM read_parquet(%1$s)
-           WHERE score_rank = 1 AND n_candidates > 1)
-     WHERE n_tied = 1
-   UNION ALL
-   SELECT capes_institution, openalex_id, 'manual'
-     FROM read_parquet(%2$s)
-     WHERE match_status = 'verified' AND openalex_id IS NOT NULL",
-  xw_sql, manual_sql
-)))
-
-oa_qa <- dbGetQuery(con, "
-  SELECT count(*) AS rows, count(DISTINCT capes_institution) AS institutions
-  FROM capes_oa")
-# A checagem que importa: nenhuma instituicao com dois ids, ou o join
-# abaixo abriria em leque.
-stopifnot(oa_qa$rows == oa_qa$institutions)
-if (oa_qa$rows != exp_capes_inst_with_oa) {
-  warning("Instituicoes CAPES com openalex_id ", oa_qa$rows, " != ",
-          exp_capes_inst_with_oa, " medido.")
+if (institution_mode == "openalex") {
+  # instituicao -> openalex_id, em tres bracos, UM id por instituicao.
+  invisible(dbExecute(con, sprintf(
+    "CREATE TEMP TABLE capes_oa AS
+     SELECT capes_institution, openalex_id, 'jw_unique' AS oa_source
+       FROM read_parquet(%1$s) WHERE n_candidates = 1
+     UNION ALL
+     SELECT capes_institution, openalex_id, 'jw_rank1'
+       FROM (SELECT capes_institution, openalex_id,
+                    count(*) OVER (PARTITION BY capes_institution) AS n_tied
+             FROM read_parquet(%1$s)
+             WHERE score_rank = 1 AND n_candidates > 1)
+       WHERE n_tied = 1
+     UNION ALL
+     SELECT capes_institution, openalex_id, 'manual'
+       FROM read_parquet(%2$s)
+       WHERE match_status = 'verified' AND openalex_id IS NOT NULL",
+    xw_sql, manual_sql
+  )))
+  oa_qa <- dbGetQuery(con, "
+    SELECT count(*) AS rows, count(DISTINCT capes_institution) AS institutions
+    FROM capes_oa")
+  stopifnot(oa_qa$rows == oa_qa$institutions)
+  if (oa_qa$rows != exp_capes_inst_with_oa) {
+    warning("Instituicoes CAPES com openalex_id ", oa_qa$rows, " != ",
+            exp_capes_inst_with_oa, " medido.")
+  }
+  capes_row_cover <- dbGetQuery(con, "
+    SELECT count_if(o.openalex_id IS NOT NULL) AS n
+    FROM capes_rows c LEFT JOIN capes_oa o
+      ON c.institution = o.capes_institution")$n
+  if (capes_row_cover != exp_capes_rows_with_oa) {
+    warning("Linhas CAPES com openalex_id ", capes_row_cover, " != ",
+            exp_capes_rows_with_oa, " medido.")
+  }
+  invisible(dbExecute(con, "
+    CREATE TEMP TABLE capes_lvl AS
+    SELECT person_key, lvl, course_start_year AS yr, openalex_id AS oa_id,
+           NULL::BIGINT AS co_ies, NULL::BIGINT AS co_mantenedora
+    FROM (
+      SELECT c.person_key, c.lvl, c.course_start_year, o.openalex_id,
+             row_number() OVER (
+               PARTITION BY c.person_key, c.lvl
+               ORDER BY c.course_start_year NULLS LAST,
+                        coalesce(o.openalex_id, '~'), c.course_code) AS rn
+      FROM capes_rows c
+      LEFT JOIN capes_oa o ON c.institution = o.capes_institution)
+    WHERE rn = 1"))
+} else {
+  oa_qa <- dbGetQuery(con, "
+    SELECT count(DISTINCT institution) FILTER
+             (WHERE institution_bucket IS NOT NULL) AS rows,
+           count(DISTINCT institution) FILTER
+             (WHERE institution_bucket IS NOT NULL) AS institutions
+    FROM capes_rows")
+  capes_row_cover <- dbGetQuery(con, "
+    SELECT count_if(institution_bucket IS NOT NULL) AS n FROM capes_rows")$n
+  invisible(dbExecute(con, "
+    CREATE TEMP TABLE capes_lvl AS
+    SELECT person_key, lvl, course_start_year AS yr,
+           institution_bucket AS oa_id, co_ies, co_mantenedora
+    FROM (
+      SELECT *, row_number() OVER (
+        PARTITION BY person_key, lvl
+        ORDER BY course_start_year NULLS LAST,
+                 institution_bucket NULLS LAST, course_code) AS rn
+      FROM capes_rows)
+    WHERE rn = 1"))
 }
-
-capes_row_cover <- dbGetQuery(con, "
-  SELECT count_if(o.openalex_id IS NOT NULL) AS rows_with_oa
-  FROM capes_rows c
-  LEFT JOIN capes_oa o ON c.institution = o.capes_institution")$rows_with_oa
-if (capes_row_cover != exp_capes_rows_with_oa) {
-  warning("Linhas CAPES com openalex_id ", capes_row_cover, " != ",
-          exp_capes_rows_with_oa, " medido.")
-}
-
-# Uma linha por (pessoa, nivel): o ANO e o ID saem do MESMO diploma, o
-# mais antigo. Agregar os dois de forma independente misturaria o ano
-# de um mestrado com a instituicao de outro.
-invisible(dbExecute(con, "
-  CREATE TEMP TABLE capes_lvl AS
-  SELECT person_key, lvl, course_start_year AS yr, openalex_id AS oa_id
-  FROM (
-    SELECT c.person_key, c.lvl, c.course_start_year, o.openalex_id,
-           row_number() OVER (
-             PARTITION BY c.person_key, c.lvl
-             ORDER BY c.course_start_year NULLS LAST,
-                      coalesce(o.openalex_id, '~'), c.course_code) AS rn
-    FROM capes_rows c
-    LEFT JOIN capes_oa o ON c.institution = o.capes_institution)
-  WHERE rn = 1"))
 
 invisible(dbExecute(con, sprintf(
   "CREATE TEMP TABLE capes_person AS
    SELECT n.person_key, n.full_name, n.birth_year,
           (%s)[1] AS first_name,
-          l.msc_start_year, l.msc_oa_id, l.phd_start_year, l.phd_oa_id
+          l.msc_start_year, l.msc_oa_id, l.msc_co_ies,
+          l.msc_co_mantenedora,
+          l.phd_start_year, l.phd_oa_id, l.phd_co_ies,
+          l.phd_co_mantenedora
    FROM (SELECT person_key, min(full_name) AS full_name,
                 min(birth_year) AS birth_year
          FROM capes_rows GROUP BY person_key) n
@@ -641,8 +763,14 @@ invisible(dbExecute(con, sprintf(
      SELECT person_key,
             max(yr)    FILTER (WHERE lvl = 'master') AS msc_start_year,
             max(oa_id) FILTER (WHERE lvl = 'master') AS msc_oa_id,
+            max(co_ies) FILTER (WHERE lvl = 'master') AS msc_co_ies,
+            max(co_mantenedora) FILTER (WHERE lvl = 'master')
+              AS msc_co_mantenedora,
             max(yr)    FILTER (WHERE lvl = 'phd')    AS phd_start_year,
-            max(oa_id) FILTER (WHERE lvl = 'phd')    AS phd_oa_id
+            max(oa_id) FILTER (WHERE lvl = 'phd')    AS phd_oa_id,
+            max(co_ies) FILTER (WHERE lvl = 'phd') AS phd_co_ies,
+            max(co_mantenedora) FILTER (WHERE lvl = 'phd')
+              AS phd_co_mantenedora
      FROM capes_lvl GROUP BY person_key) l USING (person_key)",
   capes_tokens
 )))
@@ -744,7 +872,14 @@ if (var_qa$variants != exp_variants) {
 edu_columns <- names(dbGetQuery(con, sprintf(
   "SELECT * FROM read_parquet(%s) LIMIT 0", edu_sql
 )))
-stopifnot(identical(edu_columns, expected_edu_columns))
+if (institution_mode == "openalex") {
+  stopifnot(identical(edu_columns, expected_edu_columns))
+} else {
+  # The e-MEC-enriched product deliberately appends lineage and matching
+  # diagnostics.  Require the stable upstream schema plus the one field this
+  # variant consumes, without coupling this matcher to every audit column.
+  stopifnot(all(c(expected_edu_columns, "CO_IES") %in% edu_columns))
+}
 
 # name_sur e o nome do LinkedIn SEM o primeiro token -- o outro lado
 # da comparacao. name_last e o ultimo token, que alimenta jw_lastname.
@@ -784,13 +919,31 @@ if (!is.na(exp_users_no_surname) &&
           exp_users_no_surname, " medido.")
 }
 
-map_qa <- dbGetQuery(con, sprintf(
-  "SELECT count(*) AS rows, count(DISTINCT rsid) AS rsids
-   FROM read_parquet(%s)", map_sql))
-stopifnot(map_qa$rows == map_qa$rsids)
-if (map_qa$rows != exp_safe_map_rows) {
-  warning("Mapa rsid seguro ", map_qa$rows, " != ", exp_safe_map_rows,
-          " medido.")
+if (institution_mode == "openalex") {
+  map_qa <- dbGetQuery(con, sprintf(
+    "SELECT count(*) AS rows, count(DISTINCT rsid) AS rsids
+     FROM read_parquet(%s)", map_sql))
+  stopifnot(map_qa$rows == map_qa$rsids)
+  if (map_qa$rows != exp_safe_map_rows) {
+    warning("Mapa rsid seguro ", map_qa$rows, " != ", exp_safe_map_rows,
+            " medido.")
+  }
+} else {
+  invisible(dbExecute(con, sprintf(
+    "CREATE TEMP TABLE census_map AS
+     SELECT DISTINCT TRY_CAST(CO_IES AS BIGINT) AS co_ies,
+            TRY_CAST(CO_MANTENEDORA AS BIGINT) AS co_mantenedora
+     FROM read_csv(%s, delim = ';', header = true, all_varchar = true,
+                   encoding = 'latin-1')
+     WHERE TRY_CAST(CO_IES AS BIGINT) IS NOT NULL",
+    census_sql)))
+  map_qa <- dbGetQuery(con, "
+    SELECT count(*) AS rows, count(DISTINCT co_ies) AS ids,
+           count(DISTINCT co_mantenedora) AS mantenedoras,
+           count_if(co_mantenedora IS NULL) AS sem_mantenedora
+    FROM census_map")
+  stopifnot(map_qa$rows == map_qa$ids, map_qa$rows == 2561L,
+            map_qa$mantenedoras == 1755L)
 }
 
 edu_qa <- dbGetQuery(con, sprintf(
@@ -804,37 +957,68 @@ if (edu_qa$rows != exp_edu_rows || edu_qa$users != exp_edu_users) {
 # degree_raw manda; degree sozinho nao. sql_shanghai_level le os
 # aliases `dr` e `degree`. O braco de mestrado exclui MBA -- e a
 # definicao sh_master_strict.
-invisible(dbExecute(con, sprintf(
-  "CREATE TEMP TABLE ed_arm AS
-   SELECT e.user_id,
-          CASE WHEN e.lvl = 'master' AND NOT e.is_mba THEN 'master'
-               WHEN e.lvl = 'phd'                     THEN 'phd' END AS arm,
-          CASE WHEN e.y0 BETWEEN %4$d AND %5$d THEN e.y0 END AS y0,
-          CASE WHEN e.y1 BETWEEN %4$d AND %5$d THEN e.y1 END AS y1,
-          m.openalex_id AS oa_id,
-          e.rsid
-   FROM (
-     SELECT user_id, rsid,
-            CAST(year(startdate) AS INTEGER) AS y0,
-            CAST(year(enddate)   AS INTEGER) AS y1,
-            (%1$s) AS lvl,
-            (degree = 'MBA' OR regexp_like(dr, '%2$s')) AS is_mba
-     FROM (SELECT user_id, rsid, startdate, enddate, degree,
-                  lower(trim(coalesce(degree_raw, ''))) AS dr
-           FROM read_parquet(%3$s)
-           WHERE user_id IN (SELECT user_id FROM sel))
-   ) e
-   LEFT JOIN (SELECT rsid, openalex_id FROM read_parquet(%6$s) WHERE safe = 1) m
-     ON e.rsid = m.rsid
-   WHERE (e.lvl = 'master' AND NOT e.is_mba) OR e.lvl = 'phd'",
-  sql_shanghai_level, rx_mba, edu_sql, year_min, year_max, map_sql
-)))
+if (institution_mode == "openalex") {
+  invisible(dbExecute(con, sprintf(
+    "CREATE TEMP TABLE ed_arm AS
+     SELECT e.user_id,
+            CASE WHEN e.lvl = 'master' AND NOT e.is_mba THEN 'master'
+                 WHEN e.lvl = 'phd'                     THEN 'phd' END AS arm,
+            CASE WHEN e.y0 BETWEEN %4$d AND %5$d THEN e.y0 END AS y0,
+            CASE WHEN e.y1 BETWEEN %4$d AND %5$d THEN e.y1 END AS y1,
+            m.openalex_id AS oa_id,
+            NULL::BIGINT AS co_ies, NULL::BIGINT AS co_mantenedora,
+            e.rsid
+     FROM (
+       SELECT user_id, rsid,
+              CAST(year(startdate) AS INTEGER) AS y0,
+              CAST(year(enddate)   AS INTEGER) AS y1,
+              (%1$s) AS lvl,
+              (degree = 'MBA' OR regexp_like(dr, '%2$s')) AS is_mba
+       FROM (SELECT user_id, rsid, startdate, enddate, degree,
+                    lower(trim(coalesce(degree_raw, ''))) AS dr
+             FROM read_parquet(%3$s)
+             WHERE user_id IN (SELECT user_id FROM sel))
+     ) e
+     LEFT JOIN (SELECT rsid, openalex_id FROM read_parquet(%6$s) WHERE safe = 1) m
+       ON e.rsid = m.rsid
+     WHERE (e.lvl = 'master' AND NOT e.is_mba) OR e.lvl = 'phd'",
+    sql_shanghai_level, rx_mba, edu_sql, year_min, year_max, map_sql
+  )))
+} else {
+  invisible(dbExecute(con, sprintf(
+    "CREATE TEMP TABLE ed_arm AS
+     SELECT e.user_id,
+            CASE WHEN e.lvl = 'master' AND NOT e.is_mba THEN 'master'
+                 WHEN e.lvl = 'phd'                     THEN 'phd' END AS arm,
+            CASE WHEN e.y0 BETWEEN %4$d AND %5$d THEN e.y0 END AS y0,
+            CASE WHEN e.y1 BETWEEN %4$d AND %5$d THEN e.y1 END AS y1,
+            CASE WHEN c.co_mantenedora IS NOT NULL
+                   THEN 'M:' || CAST(c.co_mantenedora AS VARCHAR)
+                 WHEN e.co_ies IS NOT NULL
+                   THEN 'I:' || CAST(e.co_ies AS VARCHAR) END AS oa_id,
+            e.co_ies, c.co_mantenedora, e.rsid
+     FROM (
+       SELECT user_id, rsid, TRY_CAST(CO_IES AS BIGINT) AS co_ies,
+              CAST(year(startdate) AS INTEGER) AS y0,
+              CAST(year(enddate)   AS INTEGER) AS y1,
+              (%1$s) AS lvl,
+              (degree = 'MBA' OR regexp_like(dr, '%2$s')) AS is_mba
+       FROM (SELECT user_id, rsid, CO_IES, startdate, enddate, degree,
+                    lower(trim(coalesce(degree_raw, ''))) AS dr
+             FROM read_parquet(%3$s)
+             WHERE user_id IN (SELECT user_id FROM sel))
+     ) e
+     LEFT JOIN census_map c USING (co_ies)
+     WHERE (e.lvl = 'master' AND NOT e.is_mba) OR e.lvl = 'phd'",
+    sql_shanghai_level, rx_mba, edu_sql, year_min, year_max
+  )))
+}
 
 # Mesma regra do lado CAPES: ano de inicio, ano de fim e instituicao
 # saem do MESMO diploma, o mais antigo.
 invisible(dbExecute(con, "
   CREATE TEMP TABLE rev_lvl AS
-  SELECT user_id, arm, y0, y1, oa_id FROM (
+  SELECT user_id, arm, y0, y1, oa_id, co_ies, co_mantenedora FROM (
     SELECT *, row_number() OVER (
       PARTITION BY user_id, arm
       ORDER BY y0 NULLS LAST, y1 NULLS LAST,
@@ -847,16 +1031,24 @@ invisible(dbExecute(con, "
   SELECT s.user_id, s.fullname, s.name_clean, s.first_name,
          s.name_sur, s.name_last,
          l.msc_start_year, l.msc_end_year, l.msc_oa_id,
-         l.phd_start_year, l.phd_end_year, l.phd_oa_id
+         l.msc_co_ies, l.msc_co_mantenedora,
+         l.phd_start_year, l.phd_end_year, l.phd_oa_id,
+         l.phd_co_ies, l.phd_co_mantenedora
   FROM sel s
   LEFT JOIN (
     SELECT user_id,
            max(y0)    FILTER (WHERE arm = 'master') AS msc_start_year,
            max(y1)    FILTER (WHERE arm = 'master') AS msc_end_year,
            max(oa_id) FILTER (WHERE arm = 'master') AS msc_oa_id,
+           max(co_ies) FILTER (WHERE arm = 'master') AS msc_co_ies,
+           max(co_mantenedora) FILTER (WHERE arm = 'master')
+             AS msc_co_mantenedora,
            max(y0)    FILTER (WHERE arm = 'phd')    AS phd_start_year,
            max(y1)    FILTER (WHERE arm = 'phd')    AS phd_end_year,
-           max(oa_id) FILTER (WHERE arm = 'phd')    AS phd_oa_id
+           max(oa_id) FILTER (WHERE arm = 'phd')    AS phd_oa_id,
+           max(co_ies) FILTER (WHERE arm = 'phd') AS phd_co_ies,
+           max(co_mantenedora) FILTER (WHERE arm = 'phd')
+             AS phd_co_mantenedora
     FROM rev_lvl GROUP BY user_id) l USING (user_id)"))
 
 ####################################################################
@@ -919,7 +1111,8 @@ bucket_expr <- sprintf("CAST(hash(%s) %% %d AS INTEGER)", key_expr, n_buckets)
 invisible(dbExecute(con, sprintf(
   "CREATE TEMP TABLE capes_keys AS
    SELECT person_key, full_name, birth_year, first_name,
-          msc_start_year, msc_oa_id, phd_start_year, phd_oa_id,
+          msc_start_year, msc_oa_id, msc_co_ies, msc_co_mantenedora,
+          phd_start_year, phd_oa_id, phd_co_ies, phd_co_mantenedora,
           %s AS key_string, %s AS bucket
    FROM capes_person
    WHERE first_name IS NOT NULL AND first_name <> ''%s",
@@ -930,7 +1123,9 @@ invisible(dbExecute(con, sprintf(
   "CREATE TEMP TABLE rev_keys AS
    SELECT user_id, fullname, name_clean, first_name, name_sur, name_last,
           msc_start_year, msc_end_year, msc_oa_id,
+          msc_co_ies, msc_co_mantenedora,
           phd_start_year, phd_end_year, phd_oa_id,
+          phd_co_ies, phd_co_mantenedora,
           %s AS key_string, %s AS bucket
    FROM rev_person
    WHERE first_name IS NOT NULL AND first_name <> ''%s",
@@ -1130,10 +1325,8 @@ invisible(dbExecute(con, sprintf(
   qp(file.path(out_dir, "best", "*.parquet"))
 )))
 
-invisible(dbExecute(con, "
-  CREATE TEMP TABLE crosswalk AS
-  SELECT
-    p.person_key, c.full_name AS capes_full_name, c.birth_year, c.first_name,
+if (institution_mode == "openalex") {
+  institution_columns <- "
     c.msc_start_year AS capes_msc_start_year,
     c.msc_oa_id      AS capes_msc_oa_id,
     c.phd_start_year AS capes_phd_start_year,
@@ -1144,7 +1337,34 @@ invisible(dbExecute(con, "
     r.msc_oa_id      AS revelio_msc_oa_id,
     r.phd_start_year AS revelio_phd_start_year,
     r.phd_end_year   AS revelio_phd_end_year,
-    r.phd_oa_id      AS revelio_phd_oa_id,
+    r.phd_oa_id      AS revelio_phd_oa_id"
+} else {
+  institution_columns <- "
+    c.msc_start_year AS capes_msc_start_year,
+    c.msc_co_ies AS capes_msc_CO_IES,
+    c.msc_co_mantenedora AS capes_msc_CO_MANTENEDORA,
+    c.msc_oa_id AS capes_msc_institution_bucket,
+    c.phd_start_year AS capes_phd_start_year,
+    c.phd_co_ies AS capes_phd_CO_IES,
+    c.phd_co_mantenedora AS capes_phd_CO_MANTENEDORA,
+    c.phd_oa_id AS capes_phd_institution_bucket,
+    p.user_id, r.fullname AS revelio_fullname,
+    r.msc_start_year AS revelio_msc_start_year,
+    r.msc_end_year AS revelio_msc_end_year,
+    r.msc_co_ies AS revelio_msc_CO_IES,
+    r.msc_co_mantenedora AS revelio_msc_CO_MANTENEDORA,
+    r.msc_oa_id AS revelio_msc_institution_bucket,
+    r.phd_start_year AS revelio_phd_start_year,
+    r.phd_end_year AS revelio_phd_end_year,
+    r.phd_co_ies AS revelio_phd_CO_IES,
+    r.phd_co_mantenedora AS revelio_phd_CO_MANTENEDORA,
+    r.phd_oa_id AS revelio_phd_institution_bucket"
+}
+invisible(dbExecute(con, sprintf("
+  CREATE TEMP TABLE crosswalk AS
+  SELECT
+    p.person_key, c.full_name AS capes_full_name, c.birth_year, c.first_name,
+    %s,
     p.jw_combo, p.jw_lastname, p.jw_name, p.best_variant,
     r.name_sur AS revelio_surnames,
     p.bucket, c.key_string,
@@ -1156,7 +1376,7 @@ invisible(dbExecute(con, "
     count(*)     OVER (PARTITION BY p.user_id)        AS n_persons
   FROM pairs p
   JOIN capes_keys c USING (person_key)
-  JOIN rev_keys   r USING (user_id)"))
+  JOIN rev_keys   r USING (user_id)", institution_columns)))
 
 invisible(dbExecute(con, "
   CREATE TEMP TABLE unmatched AS
@@ -1210,7 +1430,8 @@ stopifnot(
 # TEM de reaparecer aqui, com o mesmo escore. Isso e afirmado e nao
 # deduzido -- e o mesmo teste que o 27b faz contra a variante _noinst,
 # e e ele que pega um erro na edicao da chave.
-if (match_arm != "both" && key_oa_ids && file.exists(canon_file)) {
+if (institution_mode == "openalex" && match_arm != "both" &&
+    key_oa_ids && file.exists(canon_file)) {
   arm_superset <- dbGetQuery(con, sprintf("
     SELECT count(*) AS faltando FROM (
       SELECT person_key, CAST(user_id AS VARCHAR) AS user_id
@@ -1249,6 +1470,33 @@ for (v in list(c("combo_pares", xw_qa$combo_pairs, exp_combo_pairs),
 ### Escrita atomica
 ####################################################################
 
+writes_capes_keys <- if (institution_mode == "openalex") {
+  "SELECT * FROM capes_keys ORDER BY bucket, person_key"
+} else {
+  "SELECT person_key, full_name, birth_year, first_name,
+          msc_start_year, msc_co_ies AS msc_CO_IES,
+          msc_co_mantenedora AS msc_CO_MANTENEDORA,
+          msc_oa_id AS msc_institution_bucket,
+          phd_start_year, phd_co_ies AS phd_CO_IES,
+          phd_co_mantenedora AS phd_CO_MANTENEDORA,
+          phd_oa_id AS phd_institution_bucket,
+          key_string, bucket
+   FROM capes_keys ORDER BY bucket, person_key"
+}
+writes_rev_keys <- if (institution_mode == "openalex") {
+  "SELECT * FROM rev_keys ORDER BY bucket, user_id"
+} else {
+  "SELECT user_id, fullname, name_clean, first_name, name_sur, name_last,
+          msc_start_year, msc_end_year, msc_co_ies AS msc_CO_IES,
+          msc_co_mantenedora AS msc_CO_MANTENEDORA,
+          msc_oa_id AS msc_institution_bucket,
+          phd_start_year, phd_end_year, phd_co_ies AS phd_CO_IES,
+          phd_co_mantenedora AS phd_CO_MANTENEDORA,
+          phd_oa_id AS phd_institution_bucket,
+          key_string, bucket
+   FROM rev_keys ORDER BY bucket, user_id"
+}
+
 writes <- list(
   list(sql = "SELECT * FROM crosswalk
               ORDER BY person_key, jw_combo DESC, user_id",
@@ -1256,12 +1504,12 @@ writes <- list(
   list(sql = "SELECT * FROM unmatched
               ORDER BY best_jw_similarity DESC NULLS LAST, person_key",
        path = unm_path, fmt = "(FORMAT CSV, HEADER, DELIMITER ',')"),
-  list(sql = "SELECT * FROM capes_keys ORDER BY bucket, person_key",
+  list(sql = writes_capes_keys,
        path = keys_path, fmt = "(FORMAT PARQUET, COMPRESSION ZSTD)"),
   list(sql = "SELECT * FROM capes_var_keys
               ORDER BY bucket, person_key, n_parts, csur",
        path = vars_path, fmt = "(FORMAT PARQUET, COMPRESSION ZSTD)"),
-  list(sql = "SELECT * FROM rev_keys ORDER BY bucket, user_id",
+  list(sql = writes_rev_keys,
        path = revk_path, fmt = "(FORMAT PARQUET, COMPRESSION ZSTD)")
 )
 for (w in writes) {
@@ -1318,6 +1566,9 @@ ladder <- dbGetQuery(con, "
          (SELECT count(*) FROM rev_keys r
           WHERE EXISTS (SELECT 1 FROM capes_keys c
                         WHERE c.key_string = r.key_string))")
+if (institution_mode == "mantenedora") {
+  ladder$chave[3] <- "k3 + mantenedora/CO_IES (chave cheia)"
+}
 
 slots <- dbGetQuery(con, "
   SELECT
@@ -1352,7 +1603,9 @@ summary_df <- data.frame(
   metrica = c(
     "capes_linhas", "capes_pessoas", "capes_pessoas_com_primeiro_nome",
     "capes_pessoas_multi_grafia", "capes_instituicoes",
-    "capes_instituicoes_com_oa_id", "capes_variantes",
+    if (institution_mode == "mantenedora")
+      "capes_instituicoes_com_bucket" else "capes_instituicoes_com_oa_id",
+    "capes_variantes",
     "revelio_selecionados", "revelio_com_primeiro_nome",
     "buckets", "bucket_variantes_min", "bucket_variantes_mediana",
     "bucket_variantes_p99", "bucket_variantes_max",
@@ -1400,7 +1653,12 @@ cat("Revelio selecionados:", sel_qa$users,
 
 cat("\n=========== PREENCHIMENTO DAS POSICOES DA CHAVE ===========\n")
 print(data.frame(
-  posicao = c("msc_start_year", "phd_start_year", "msc_oa_id", "phd_oa_id"),
+  posicao = c(
+    "msc_start_year", "phd_start_year",
+    if (institution_mode == "mantenedora") "msc_institution_bucket" else
+      "msc_oa_id",
+    if (institution_mode == "mantenedora") "phd_institution_bucket" else
+      "phd_oa_id"),
   capes = c(slots$c_msc_yr, slots$c_phd_yr, slots$c_msc_oa, slots$c_phd_oa),
   revelio = c(slots$r_msc_yr, slots$r_phd_yr, slots$r_msc_oa, slots$r_phd_oa)
 ), row.names = FALSE)

@@ -2,7 +2,7 @@
 # degree-duration education population. It never reads Athena or writes S3 and
 # must not be sent to SEDAP.
 # Run from the repository root:
-#   Rscript prep/building_external_data/global_oa_degree_duration_hierarchy.R
+#   Rscript prep/building_external_data/global_oa_hierarchy.R
 # Completed partitions are resumable only while input and code checksums match.
 library(DBI)
 library(duckdb)
@@ -12,11 +12,11 @@ options(stringsAsFactors=FALSE)
 
 root <- Sys.getenv('OBMEP_ROOT','C:/Users/megaj/Globtalent Dropbox/OBMEP')
 coh <- file.path(root,'Data/intermediate/revelio_br_cohort')
-education_dir <- file.path(coh,'obmep_candidates_step_1_degree_duration_education')
-out <- Sys.getenv('OBMEP_GLOBAL_OA_DURATION_OUT',file.path(coh,'global_oa_hierarchy_degree_duration'))
+education_dir <- file.path(coh,'obmep_candidates_step_1_education')
+out <- Sys.getenv('OBMEP_GLOBAL_OA_DURATION_OUT',file.path(coh,'global_oa_hierarchy'))
 snapshot <- 'C:/Users/megaj/Globtalent Dropbox/GTAllocation/Data/external/oa_snapshot/data/institutions'
 sql_path <- 'prep/building_external_data/global_oa_hierarchy_sql.R'
-script_path <- 'prep/building_external_data/global_oa_degree_duration_hierarchy.R'
+script_path <- 'prep/building_external_data/global_oa_hierarchy.R'
 
 education_paths <- sort(list.files(education_dir,full.names=TRUE))
 snapshot_paths <- sort(list.files(snapshot,pattern='[.]gz$',recursive=TRUE,full.names=TRUE))
@@ -299,7 +299,7 @@ report <- list(completed_utc=format(Sys.time(),tz='UTC',usetz=TRUE),
  validation=list(source_rows_and_users=TRUE,physical_keys_unique=TRUE,
   original_values_preserved=TRUE,selected_ids_subset_candidates=TRUE,
   selected_ids_in_snapshot=TRUE,inputs_and_legacy_products_unchanged=TRUE))
-write_json(report,file.path(out,'global_oa_hierarchy_degree_duration_report.json'),
+write_json(report,file.path(out,'global_oa_hierarchy_report.json'),
  pretty=TRUE,auto_unbox=TRUE,dataframe='rows',digits=16,na='null')
 dbDisconnect(con,shutdown=TRUE)
 cat('Completed refreshed global OpenAlex hierarchy:',out,'\n')

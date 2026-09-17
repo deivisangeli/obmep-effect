@@ -45,21 +45,25 @@ obmep_root <- Sys.getenv(
 cohort_dir <- file.path(obmep_root, "Data/intermediate/revelio_br_cohort")
 
 cohort_path <- file.path(
-  cohort_dir, "obmep_candidates_step_1_degree_duration.parquet")
-canonical_union_path <- file.path(cohort_dir, "obmep_candidates_step_1.parquet")
+  cohort_dir, "obmep_candidates_step_1.parquet")
+canonical_union_path <- file.path(
+  cohort_dir, "archive/legacy_cohorts/pre_degree_duration_20260916",
+  "obmep_candidates_step_1.parquet")
 canonical_position_dir <- file.path(
-  cohort_dir, "obmep_candidates_step_1_position")
+  cohort_dir, "archive/legacy_cohorts/pre_degree_duration_20260916",
+  "obmep_candidates_step_1_position")
 canonical_role_loc_dir <- file.path(
-  cohort_dir, "obmep_candidates_step_1_position_role_loc")
+  cohort_dir, "archive/legacy_cohorts/pre_degree_duration_20260916",
+  "obmep_candidates_step_1_position_role_loc")
 duration_education_dir <- file.path(
-  cohort_dir, "obmep_candidates_step_1_degree_duration_education")
+  cohort_dir, "obmep_candidates_step_1_education")
 
 position_dir <- file.path(
-  cohort_dir, "obmep_candidates_step_1_degree_duration_position")
+  cohort_dir, "obmep_candidates_step_1_position")
 report_path <- file.path(
-  cohort_dir, "obmep_candidates_step_1_degree_duration_position_report.json")
+  cohort_dir, "obmep_candidates_step_1_position_report.json")
 ledger_path <- file.path(
-  cohort_dir, "obmep_candidates_step_1_degree_duration_position_scan_ledger.csv")
+  cohort_dir, "obmep_candidates_step_1_position_scan_ledger.csv")
 
 expected_users <- 8901904
 expected_country_only <- 5122395

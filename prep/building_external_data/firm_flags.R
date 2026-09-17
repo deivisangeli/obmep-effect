@@ -18,25 +18,25 @@ library(duckdb)
 root <- Sys.getenv("OBMEP_ROOT",
                    unset = "C:/Users/megaj/Globtalent Dropbox/OBMEP")
 coh <- file.path(root, "Data/intermediate/revelio_br_cohort")
-position_dir <- file.path(coh, "obmep_candidates_step_1_degree_duration_position")
-rcid_dir <- file.path(coh, "obmep_candidates_step_1_degree_duration_position_rcid")
-cohort_path <- file.path(coh, "obmep_candidates_step_1_degree_duration.parquet")
+position_dir <- file.path(coh, "obmep_candidates_step_1_position")
+rcid_dir <- file.path(coh, "obmep_candidates_step_1_position_rcid")
+cohort_path <- file.path(coh, "obmep_candidates_step_1.parquet")
 firm_path <- file.path(root, "Data/intermediate/linkedin_company_urls",
                        "linkedin_company_rcid_2026.parquet")
 unresolved_path <- file.path(root, "Data/intermediate/linkedin_company_urls",
                              "linkedin_company_unresolved_2026.parquet")
 university_path <- file.path(
-  root, "Data/intermediate/degree_duration_ranked_university_company_rcid",
-  "degree_duration_ranked_university_company_rcid.parquet")
+  root, "Data/intermediate/ranked_university_company_rcid",
+  "ranked_university_company_rcid.parquet")
 
 run_id <- Sys.getenv("OBMEP_DD_FIRMS_RUN_ID", unset = format(Sys.time(), "%Y%m%dT%H%M%S"))
 if (!grepl("^[0-9]{8}T[0-9]{6}$", run_id)) stop("Invalid run id: ", run_id)
 stage_dir <- file.path(coh, ".degree_duration_firms_staging", run_id)
 backup_dir <- file.path(coh, "degree_duration_firms_backups", run_id)
 dest <- c(
-  positions = file.path(coh, "obmep_candidates_step_1_degree_duration_firms_positions.parquet"),
-  users = file.path(coh, "obmep_candidates_step_1_degree_duration_firms.parquet"),
-  report = file.path(coh, "degree_duration_firm_flags_report.json"))
+  positions = file.path(coh, "obmep_candidates_step_1_firms_positions.parquet"),
+  users = file.path(coh, "obmep_candidates_step_1_firms.parquet"),
+  report = file.path(coh, "firm_flags_report.json"))
 stage <- file.path(stage_dir, basename(dest)); names(stage) <- names(dest)
 
 inputs <- c(position_dir, rcid_dir, cohort_path, firm_path,

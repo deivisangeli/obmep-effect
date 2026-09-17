@@ -1,4 +1,19 @@
 > **Folder scope.** Pipelines that build external datasets on this machine against Dropbox data.
+
+> **Canonical cohort since 2026-09-16.** The duration-and-degree definition is
+> now the active cohort. Its repository entrypoints and local Dropbox products
+> use unsuffixed canonical names. The former cohort scripts are frozen under
+> `archive/legacy_cohorts/`, and their Dropbox products are under
+> `revelio_br_cohort/archive/legacy_cohorts/pre_degree_duration_20260916/`.
+> Historical S3 object prefixes and Athena/Glue table names retain their
+> `_degree_duration` identifiers for compatibility; this reorganization did
+> not mutate or scan remote tables.
+>
+> University identity is now built before education flags by
+> `build_university_raw_oa_co_ies_crosswalk.R`. The row-faithful output uses
+> `(source_file, source_row)`, assigns `OA_id` only through the established
+> `safe=1` rsid map, retains `CO_IES_base` for exact CAPES-v1 replication, and
+> publishes regex-v1 `CO_IES` as the final canonical institution code.
 > Everything here runs **locally, outside SEDAP**, and nothing here may be copied into
 > `scripts_sedap/` — see `AGENTS.md` → *Execution Environments*.
 >
@@ -8,19 +23,41 @@
 > re-run. Deliberately do not maintain a second count here — it repeatedly went stale as stages were
 > added.
 
-> **Current education flags (2026-09-09):** Brazilian flags retain the coordinated
-> no-floor rebuild. RUF and Shanghai flags now use the unique parent-adjusted IDs
-> selected by the global hierarchy; `redefine_ranked_education_flags.R` publishes
-> those two families together. **This is the canonical method for preparing all
-> RUF and Shanghai education flags; earlier family-specific and no-floor methods
-> are retained only for provenance, row-level matching, or historical comparison.**
-> See [Parent-adjusted RUF and Shanghai flags](#parent-adjusted-ruf-and-shanghai-flags-2026-09-09).
->
-> **Refreshed degree-duration cohort (2026-09-11):** its ranked flags are parallel
-> products. They reuse the global OpenAlex hierarchy, replace RUF with the 52 Brazilian
-> institutions in CWUR 2026, and admit the stored duration fallback only when Revelio's
-> normalized `degree` is the literal `empty`. Legacy products above remain unchanged.
-> See [Degree-duration CWUR and Shanghai flags](#degree-duration-cwur-and-shanghai-flags-2026-09-11).
+## Current canonical pipeline
+
+The active dependency order is:
+
+```text
+revelio_br_cohort_user_ids.R
+  -> obmep_candidates_step_1_education.R
+  -> global_oa_hierarchy.R
+  -> emec_hierarchy.R
+  -> emec_regex_recovery.R
+  -> build_university_raw_oa_co_ies_crosswalk.R
+  -> ranked_education_flags.R
+  -> ranked_university_company_rcid.R / firm_flags.R
+  -> obmep_candidates_selected.R
+  -> CAPES matching and placebo/union/audit scripts
+```
+
+`ranked_education_flags.R` reads
+`university_identity_crosswalk/education_row_identity/`, so OA and e-MEC
+identities are present before education flags are aggregated. `OA_id` uses only
+the established 655-row `safe=1` rsid map. `CO_IES_base` preserves the exact
+institution assignments used by the saved CAPES-v1 match; `CO_IES` contains the
+regex-v1 extension. The compact crosswalks retain distinct
+`university_raw`–`OA_id`–`CO_IES` combinations rather than forcing an unsafe
+raw-name-only mapping.
+
+The active CAPES default is `OBMEP_MATCH_COHORT=degree_duration` (the retained
+environment value is a compatibility label). Maintainer matching accepts
+`OBMEP_MATCH_CO_IES_VERSION=base` or `regex_v1`. The regex-v1 master, PhD,
+placebo, union and audit products are isolated under `_regex_v1` directories;
+the base products remain unchanged. No pipeline reorganization step renames or
+mutates S3 objects, Athena tables or Glue definitions.
+
+Sections describing the pre-2026-09-16 cohort are historical. Their executable
+entrypoints now live under `archive/legacy_cohorts/`; they are not active stages.
 
 | # | File | Net | Reads | Writes |
 |---|---|---|---|---|
@@ -45,13 +82,13 @@
 | 6a | `shanghai_rsid_oa_crosswalk.R` | Athena | Revelio + 4b | `shanghai_rsid_oa_crosswalk` + OBMEP `shanghai_ranking/shanghai_rsid_oa_crosswalk.parquet` |
 | | **OBMEP candidate cohorts** | | | |
 | 7 | `br_degree_patterns.R` | — | *(nothing — sourced constants)* | *(nothing)* |
-| 8 | `revelio_br_cohort_user_ids.R` | Athena | Revelio + 5 | `obmep_br_cohort_user_ids` |
+| 8 | `revelio_br_cohort_user_ids.R` | S3 + Athena | Revelio + 5 | local `obmep_br_cohort_user_ids.parquet`; retained remote `_degree_duration` table/prefix |
 | 9 | `revelio_br_name_cohort_user_ids.R` | Athena | Revelio + 2 + 5 | `obmep_br_name_cohort_user_ids` |
-| 10 | `obmep_candidates_step_1.R` | Athena | 8 + 9 + 2 | `obmep_candidates_step_1` |
-| | **The alternative cohort — rsid propagation, gated** | | | |
+| 10 | `obmep_candidates_step_1_education.R` | S3 + Athena | 8 + 9 + Revelio education | local canonical cohort and education parts; retained remote `_degree_duration` table/prefix |
+| | **Archived alternative cohort — rsid propagation, gated** | | | |
 | 8a | `rsid_br_user_share.R` | Athena | Revelio + 5 | `rsid_br_user_share` + OBMEP `revelio_br_cohort/rsid_br_user_share{.parquet,_rejected.csv}` |
-| 8b | `revelio_br_cohort_user_ids_alt.R` | Athena | Revelio + 5 + 8a | `obmep_br_cohort_user_ids_alt` |
-| 10alt | `obmep_candidates_step_1_alt.R` | Athena | 8b + 9 + 2 | `obmep_candidates_step_1_alt` |
+| 8b | `archive/legacy_cohorts/revelio_br_cohort_user_ids_alt.R` | Athena | Revelio + 5 + 8a | archived `obmep_br_cohort_user_ids_alt` definition |
+| 10alt | `archive/legacy_cohorts/obmep_candidates_step_1_alt.R` | Athena | 8b + 9 + 2 | archived `obmep_candidates_step_1_alt` definition |
 | 8d | `rsid_openalex_id_crosswalk.R` | — | 8a + 3 | OBMEP `revelio_br_cohort/rsid_openalex_id_crosswalk.parquet` |
 | 8e | `rsid_coverage_audit.R` | Athena | Revelio + 3 + 8a | `rsid_coverage_audit` + OBMEP `revelio_br_cohort/rsid_coverage_audit.parquet` |
 | 8f | `rsid_openalex_one_to_one.R` | — | 8d | OBMEP `revelio_br_cohort/rsid_openalex_safe_map.parquet` + `rsid_oa_link_{worksheet.parquet,class.csv}` |
@@ -66,8 +103,8 @@
 | 10a | `obmep_candidates_step_1_entries.R` | S3 + Athena | Revelio + 10 | `obmep_candidates_step_1_position`, `..._education` |
 | 10b | `obmep_candidates_step_1_position_rcid.R` | S3 + Athena | Revelio + 10 | `obmep_candidates_step_1_position_rcid` |
 | 10c | `obmep_candidates_step_1_position_role_loc.R` | S3 + Athena | Revelio + 10 + 10a | `obmep_candidates_step_1_position_role_loc` |
-| 10a-duration | `obmep_candidates_step_1_degree_duration_position.R` | S3 + Athena | Revelio + refreshed duration union | `obmep_candidates_step_1_degree_duration_position` |
-| 10b-duration | `obmep_candidates_step_1_degree_duration_position_rcid.R` | S3 + Athena | Revelio + refreshed duration cohort | `obmep_candidates_step_1_degree_duration_position_rcid` + report and scan ledger |
+| 10a-duration | `obmep_candidates_step_1_position.R` | S3 + Athena | Revelio + refreshed duration union | `obmep_candidates_step_1_degree_duration_position` |
+| 10b-duration | `obmep_candidates_step_1_position_rcid.R` | S3 + Athena | Revelio + refreshed duration cohort | `obmep_candidates_step_1_degree_duration_position_rcid` + report and scan ledger |
 | 10d | `role_title_audit.R` | — | 21a + 10a | OBMEP `revelio_br_cohort/role_audit_*` |
 | 10e | `role_audit_review.R` | — | 10d | OBMEP `revelio_br_cohort/role_audit_review.xlsx` |
 | 10f | `role_jobcat_audit.R` | — | 21a + 10a | OBMEP `revelio_br_cohort/jobcat_audit_*` |
@@ -84,32 +121,41 @@
 | 15 | `ruf_stem_top50.R` | — | output of 14 | OBMEP `ruf_ranking/ruf_stem_top<N>_2025.parquet` + `..._institutions_2025.parquet` |
 | 15a | `ruf_openalex_br_crosswalk.R` | — | 15 + 3 | OBMEP `ruf_ranking/ruf_openalex_br_2025.parquet` |
 | | **Top-1000 Shanghai degrees** | | | |
-| 16 | `shanghai_top1000_degree_flags.R` | — | global hierarchy + 4a + OpenAlex snapshot + 7 | OBMEP `revelio_br_cohort/obmep_candidates_step_1_shanghai.parquet` |
+| 16 | `shanghai_top1000_degree_flags.R` | — | historical ranked-flag inputs | Historical method retained for comparison; not the canonical flag publisher |
 | 16a | `shanghai_acronym_arm.R` | — | 4 + 10a + 7 | OBMEP `revelio_br_cohort/obmep_candidates_step_1_shanghai_acr.parquet` + `shanghai_acronym_{candidates,class}.csv` |
 | 16b | `shanghai_raw_crosswalk.R` | — | 4 + 16a + 10a | OBMEP `revelio_br_cohort/shanghai_raw_crosswalk.parquet` |
 | 16c | `shanghai_rsid_nofloor_degree_flags.R` | — | 4a + 6a + 10a + 7; 16 for comparison | OBMEP `revelio_br_cohort/obmep_candidates_step_1_shanghai_rsid_nofloor{,_matches}.parquet` + report JSON |
 | 17 | `shanghai_flag_audit.R` | — | 16 + 10a + 7 + 4 | OBMEP `revelio_br_cohort/shanghai_audit_*` |
 | | **Brazilian OpenAlex degrees, no floor** | | | |
 | 8n | `br_openalex_rsid_nofloor_degree_flags.R` | — | 3 + 8d + 10a + 7; 10 for comparison | OBMEP `revelio_br_cohort/obmep_candidates_step_1_br_openalex_rsid_nofloor{,_matches}.parquet` + report JSON |
-| 8o | `rebuild_education_flags.R` | — | 3 + 8d + 4a + 6a + 10a + 7 + 15 + 15a | Rebuilds the no-floor products, then reapplies 8p to keep the published ranked flags current |
-| 8p | `redefine_ranked_education_flags.R` | — | global hierarchy + OpenAlex snapshot + 4a + 15a + 7 | Parent-adjusted RUF and Shanghai flags, compact decision maps, backups and reports |
-| 8q | `global_oa_degree_duration_hierarchy.R` | — | 10a-duration education + global OpenAlex snapshot | `global_oa_hierarchy_degree_duration/` decisions and enriched education parts |
-| 8r | `degree_duration_ranked_education_flags.R` | — | 8q + CWUR 28a + Shanghai 4a + OpenAlex snapshot + 7 | Parallel `degree_duration_cwur` and `degree_duration_shanghai` flags + report |
+| 8o | `archive/legacy_cohorts/rebuild_education_flags.R` | — | historical inputs | Archived coordinated legacy rebuild |
+| 8p | `archive/legacy_cohorts/redefine_ranked_education_flags.R` | — | historical inputs | Archived parent-adjusted RUF/Shanghai publisher |
+| 8q | `global_oa_hierarchy.R` | — | canonical education + global OpenAlex snapshot | `global_oa_hierarchy/` decisions and enriched education parts |
+| 8r | `ranked_education_flags.R` | — | unified identity rows + CWUR 28a + Shanghai 4a + OpenAlex snapshot + 7 | canonical `cw_*` and `sh_*` flags + report |
+| 8s | `unmatched_valid_degree_sample.R` | — | 8q education parts | `unmatched_valid_degree_sample.{parquet,xlsx}` — two 100-row review samples of the unmatched valid-degree residue |
+| 8t | `ranked_subunit_rescue.R` | — | 8q catalog/aliases/education + 8r ranked parent catalog | `ranked_subunit_rescue.{parquet,csv,xlsx,json}` — sub-unit and acronym **candidates** for ranked institutions; publishes no flags |
+| 8u | `degree_class_audit.R` | — | 8q education parts + 7 | `degree_class_audit.{parquet,xlsx,json}` — two stratified 100-row samples for a human audit of the degree-level classifier |
+| 8v | `emec_hierarchy.R` | — | 8q enriched education + e-MEC IES CSV + shared hierarchy SQL | `emec_hierarchy/` decisions, crosswalk, catalog, evidence and enriched education parts |
+| 8v-check | `verify_emec_hierarchy.R` | — | output of 8v + its immutable inputs | `emec_hierarchy/degree_duration_emec_hierarchy_verification.json` |
+| 8w | `emec_audit_sample.R` | — | output of 8v | Fixed, fingerprinted 100-decision semantic-audit sample in parquet/CSV plus manifest |
+| 8x | `emec_regex_recovery.R` + `emec_regex_aliases.csv` | — | checked 8v output | versioned `emec_hierarchy_regex_v1/` extension; provenance must be retained because some rule families need review |
+| 8x-test | `emec_regex_recovery_tests.R` | — | 8x output + the fixed reviewed unmatched sample | Acceptance report for 57 intended recoveries and 43 retained rejections |
+| 8x-check | `verify_emec_regex_recovery.R` | — | 8x output + immutable 8v inputs | Full-partition preservation and recovery-invariant verification JSON |
+| 8y | `emec_regex_sample_export.R` | — | 8x enriched education + first sample workbook | JSON source for a new, disjoint 100-matched/100-unmatched valid-degree review workbook |
+| 8z | `build_university_raw_oa_co_ies_crosswalk.R` | — | 8v + 8x + safe rsid–OA map | row-faithful identity parts plus compact final and CAPES-v1 crosswalks |
 | | **Employer flags** | | | |
 | 18 | `linkedin_company_rcid.R` | Athena | the two company CSVs + Revelio | OBMEP `linkedin_company_urls/linkedin_company_rcid_2026.parquet` + `..._unresolved_...` |
-| 18a | `ranked_university_company_rcid.R` | Athena | parent-adjusted ranked catalogs + `academic_company_ref.company` | OBMEP `ranked_university_company_rcid/{ranked_university_company_rcid.parquet,ranked_university_company_rcid_report.json}` |
-| 18b | `degree_duration_ranked_university_company_rcid.R` | Athena | degree-duration CWUR/Shanghai catalog + `academic_company_ref.company` | `degree_duration_ranked_university_company_rcid/` map, report and scan ledger |
-| 19 | `obmep_candidates_step_1_firms.R` | — | 10a + 10b + 18 + 18a | staged or canonical `obmep_candidates_step_1_firms{,_positions}.parquet` + report |
-| 19a | `rebuild_ranked_university_work_flags.R` | Athena + local | 18a, 19, 21, 21a | validates, backs up, and publishes the five canonical employer/selection artifacts |
-| 19b | `degree_duration_firm_flags.R` | — | 10a-duration + 10b-duration + 18 + 18b | `obmep_candidates_step_1_degree_duration_firms{,_positions}.parquet` + report |
+| 18a | `archive/legacy_cohorts/ranked_university_company_rcid.R` | Athena | historical ranked catalogs | archived legacy employer crosswalk |
+| 18b | `ranked_university_company_rcid.R` | Athena | canonical CWUR/Shanghai catalog + `academic_company_ref.company` | `ranked_university_company_rcid/` map, report and scan ledger |
+| 19 | `archive/legacy_cohorts/obmep_candidates_step_1_firms.R` | — | historical inputs | archived legacy employer flags |
+| 19a | `archive/legacy_cohorts/rebuild_ranked_university_work_flags.R` | Athena + local | historical inputs | archived legacy coordinated rebuild |
+| 19b | `firm_flags.R` | — | canonical position/RCID inputs + 18 + 18b | `obmep_candidates_step_1_firms{,_positions}.parquet` + report |
 | | **Top-10 RUF degrees** | | | |
 | 20 | `obmep_candidates_step_1_ruf_degree.R` | — | global hierarchy + OpenAlex snapshot + 15 + 15a + 7 | OBMEP `revelio_br_cohort/obmep_candidates_step_1_ruf_degree.parquet` |
 | | **The selected candidates** | | | |
-| 21 | `obmep_candidates_selected.R` | — | 16 + 19 + 20 + GTAllocation LinkedIn names | OBMEP `revelio_br_cohort/obmep_candidates_selected.parquet` |
-| 21a | `obmep_candidates_selected_positions.R` | — | 21 + 10c | OBMEP `revelio_br_cohort/obmep_candidates_selected_positions.parquet` |
-| 21-duration | `obmep_candidates_selected_degree_duration.R` | — | 8r + 19b + GTAllocation LinkedIn names | OBMEP `revelio_br_cohort/obmep_candidates_selected_degree_duration.parquet` |
-| 21alt | `obmep_candidates_selected_alt.R` | — | 16 + 19 + 20 + 8g + 16a + GTAllocation LinkedIn names | OBMEP `revelio_br_cohort/obmep_candidates_selected_alt.parquet` |
-| 21a-alt | `obmep_candidates_selected_positions_alt.R` | — | 21alt + 10c | OBMEP `revelio_br_cohort/obmep_candidates_selected_positions_alt.parquet` |
+| 21 | `obmep_candidates_selected.R` | — | 8r + 19b + GTAllocation LinkedIn names | canonical `obmep_candidates_selected.parquet` |
+| 21-legacy | `archive/legacy_cohorts/obmep_candidates_selected.R` | — | historical flags | archived pre-degree-duration selection |
+| 21alt | `archive/legacy_cohorts/obmep_candidates_selected_alt.R` | — | historical alternative flags | archived alternative selection |
 | | **CAPES stricto sensu discentes** | | | |
 | 22 | `download_capes_discentes.R` | dadosabertos.capes.gov.br | CAPES CKAN API | OBMEP `Data/raw/capes_discentes/` (21 xlsx, 1.1 GB) |
 | 23 | `capes_discentes_panel.R` | — | output of 22 | OBMEP `capes_discentes/by_year/*.parquet` + `capes_discentes_2004_2024.parquet` |
@@ -117,7 +163,7 @@
 | 25 | `capes_openalex_br_crosswalk.R` | — | outputs of 24 + 3 | OBMEP `capes_discentes/capes_openalex_br_crosswalk{.parquet,_unmatched.csv}` |
 | 26 | `capes_openalex_manual_crosswalk.R` | manual web | unmatched output of 25 + output of 3 | OBMEP `capes_discentes/capes_openalex_manual/` |
 | | **CAPES x selected candidates** | | | |
-| 27 | `capes_obmep_candidates_name_match.R` | — | 24 + 25 + 26 + 10a/degree-duration education + 21/21-duration + 8f + 7 | OBMEP `capes_discentes/capes_obmep_match{,_degree_duration,...}/` — see `OBMEP_MATCH_COHORT`, `OBMEP_MATCH_KEY_OA` and `OBMEP_MATCH_ARM` |
+| 27 | `capes_obmep_candidates_name_match.R` | — | 24 + 25 + 26 + canonical identity rows + 21 + 8f + 7 | isolated OpenAlex/base-e-MEC/regex-v1 match directories — see `OBMEP_MATCH_INST_KEY`, `OBMEP_MATCH_CO_IES_VERSION` and `OBMEP_MATCH_ARM` |
 | 27a | `capes_obmep_match_sample.R` | — | 27 or 27c, + 24 + 25 + 26 + 10a + 8f + 3 + 7 | `<product>/capes_obmep_match_sample.{parquet,xlsx}`; `OBMEP_MATCH_ARM=union` draws from 27c |
 | 27b | `capes_obmep_match_placebo.R` | — | 27 | `<product>/capes_obmep_match_placebo{,_pairs}.parquet`; honours `OBMEP_MATCH_ARM` |
 | 27c | `capes_obmep_match_union.R` | — | the `_msc` and `_phd` arms of 27 and 27b, plus the canonical for `in_canonical` | OBMEP `capes_discentes/capes_obmep_match_union/` |
@@ -3717,7 +3763,7 @@ redrawing anything.
 
 ## Parallel ranked-regex plus duration cohort — 2026-09-10
 
-`revelio_br_cohort_user_ids_degree_duration.R` builds a deliberately parallel country cohort at
+`revelio_br_cohort_user_ids.R` builds a deliberately parallel country cohort at
 `revelio_database.obmep_br_cohort_user_ids_degree_duration` and downloads
 `obmep_br_cohort_user_ids_degree_duration.parquet`. It does **not** replace the canonical
 5,736,020-user cohort or feed any candidate-selection stage.
@@ -3765,11 +3811,11 @@ local parquet remained byte-identical before and after (`MD5 dde17d0b9e9c2ae639a
 and its Athena count remained 5,736,020.
 
 Run the 24 local boundary fixtures with
-`Rscript prep/building_external_data/revelio_br_cohort_degree_duration_tests.R`.
+`Rscript prep/building_external_data/revelio_br_cohort_tests.R`.
 
 ### Refreshed country/name union and education histories — 2026-09-10
 
-`obmep_candidates_step_1_degree_duration_education.R` unions the parallel revised country cohort
+`obmep_candidates_step_1_education.R` unions the parallel revised country cohort
 with the existing name cohort and downloads every education entry for that refreshed population.
 It creates parallel outputs and leaves `obmep_candidates_step_1` and its education directory
 unchanged. The narrow union table deliberately stores only `user_id`, `in_country_cohort` and
@@ -3818,14 +3864,14 @@ Outputs:
 - Athena: `revelio_database.obmep_candidates_step_1_degree_duration` and
   `revelio_database.obmep_candidates_step_1_degree_duration_education`.
 - S3: `s3://revelio-misc/obmep_candidates_step_1_degree_duration/` and
-  `s3://revelio-misc/exports/obmep_candidates_step_1_degree_duration_education/`.
+  `s3://revelio-misc/exports/obmep_candidates_step_1_education/`.
 - Dropbox: `obmep_candidates_step_1_degree_duration.parquet`,
-  `obmep_candidates_step_1_degree_duration_education/`, the 100-row sample CSV, JSON report and
+  `obmep_candidates_step_1_education/`, the 100-row sample CSV, JSON report and
   scan-ledger CSV in `Data/intermediate/revelio_br_cohort/`.
 
 ### Refreshed-union position histories — 2026-09-11
 
-`obmep_candidates_step_1_degree_duration_position.R` downloads every Revelio position for the
+`obmep_candidates_step_1_position.R` downloads every Revelio position for the
 8,901,904-user refreshed country/name union. It is the 28-column union of the established
 12-column position extract and 18-column role/location supplement, with the shared `user_id` and
 `position_id` stored once. It contains company names and URLs, titles and description, NAICS,
@@ -7439,21 +7485,21 @@ verdicts were not applied as production corrections.
 The refreshed 8,901,904-user cohort has its own offline ranked-education path. It deliberately
 does not replace the legacy RUF/Shanghai files or feed the existing selected-candidate tables.
 
-`global_oa_degree_duration_hierarchy.R` reads the 30 local files under
-`obmep_candidates_step_1_degree_duration_education/`, assigns `source_file` and the parquet
+`global_oa_hierarchy.R` reads the 30 local files under
+`obmep_candidates_step_1_education/`, assigns `source_file` and the parquet
 `file_row_number` as a physical key, and reruns the same context-aware hierarchy described above.
 The decision grain remains original-case `university_raw`, standardized country and the candidate
 set supplied by `rsid` (or direct C_norm fallback only when rsid is missing). Selection still stops
 at normalized equality, contained name, supplied acronym, then the 0.2-country/0.8-Jaro-Winkler
 score. Exact score ties survive; they are not resolved by OA-ID order. The stage writes its own
-checksummed and resumable products under `global_oa_hierarchy_degree_duration/`.
+checksummed and resumable products under `global_oa_hierarchy/`.
 
-`degree_duration_ranked_education_flags.R` consumes those selections and publishes two positive-user
+`ranked_education_flags.R` consumes those selections and publishes two positive-user
 files:
 
 ```
-obmep_candidates_step_1_degree_duration_cwur.parquet       cw_* columns
-obmep_candidates_step_1_degree_duration_shanghai.parquet   established sh_* schema
+obmep_candidates_step_1_cwur.parquet       cw_* columns
+obmep_candidates_step_1_shanghai.parquet   established sh_* schema
 ```
 
 The CWUR family is every matched 2026 row with `country_iso2 = 'BR'`: 52 institutions, with
@@ -7498,16 +7544,487 @@ Run and validate locally, in order:
 ```powershell
 Rscript prep/building_external_data/global_oa_hierarchy_tests.R
 Rscript prep/building_external_data/cwur_openalex_crosswalk_tests.R
-Rscript prep/building_external_data/revelio_br_cohort_degree_duration_tests.R
-Rscript prep/building_external_data/degree_duration_ranked_education_flags_tests.R
-Rscript prep/building_external_data/global_oa_degree_duration_hierarchy.R
-Rscript prep/building_external_data/degree_duration_ranked_education_flags.R
+Rscript prep/building_external_data/revelio_br_cohort_tests.R
+Rscript prep/building_external_data/ranked_education_flags_tests.R
+Rscript prep/building_external_data/global_oa_hierarchy.R
+Rscript prep/building_external_data/ranked_education_flags.R
 ```
 
 Neither production stage uses Athena, S3 or the internet. Each hashes its inputs and the neighboring
 legacy products, validates row/user grains and output aggregations, and refuses to resume after code
 or input drift. The final report is
-`revelio_br_cohort/ranked_education_flags_degree_duration_report.json`.
+`revelio_br_cohort/ranked_education_flags_report.json`.
+
+---
+
+## The unmatched valid-degree residue — script 8s (2026-09-14)
+
+8q left 6,063,272 of its 19,710,307 education rows without an OpenAlex id. That pile mixes
+genuine institutions the matcher missed with rows that were never going to match because they
+are not degrees. `unmatched_valid_degree_sample.R` separates the half that
+matters and parks two review samples over it. It is local, offline, and reads nothing but
+`global_oa_hierarchy/education_parts/`.
+
+The population is `global_oa_selected_count = 0` **and** an effective level in
+`('bachelor','master','phd')`, where the effective level is 8r's own expression — stored
+`ranked_level`, overridden to `bachelor` when `coalesce(degree,'empty') = 'empty' AND
+degree_matches_laxed = 1`. Revelio's `degree` column is not the filter; this folder already
+measures that at 58.4% recall.
+
+| effective level | matched rows | unmatched rows | unmatched users |
+|---|---:|---:|---:|
+| bachelor | 8,316,573 | **2,107,972** | 1,947,182 |
+| master | 1,300,556 | **258,841** | 239,864 |
+| phd | 115,266 | **13,385** | 12,750 |
+| other | 3,914,640 | 3,683,074 | 2,486,728 |
+
+The target population is **2,380,198 rows over 2,108,775 distinct users** — the per-level user
+counts above do not add to it, because a user may hold rows at more than one level — and it sits
+on only **582,781 distinct `(university_raw, standardized country)` pairs**.
+
+### The residue is a candidate-supply failure, not a scoring failure
+
+| route | status | rows | raw/country pairs | users |
+|---|---|---:|---:|---:|
+| `unmatched_missing_rsid` | `unmatched` | 1,278,347 | 525,222 | 1,172,211 |
+| `unmatched_known_rsid` | `unmatched` | 1,096,760 | 65,470 | 1,001,313 |
+| `rsid` | `unresolved_blank_raw` | 5,091 | 49 | 4,977 |
+
+**2,375,107 of the 2,380,198 rows carried an empty candidate set**, and the remaining 5,091 are a
+blank `university_raw`. Not one row in this population reached the 0.2-country/0.8-Jaro-Winkler
+score and lost. So the reviewable question is "does an OpenAlex record exist that this spelling
+should have found?", not "did the scorer pick the wrong institution". The workbook's rubric says
+this on its first screen; without it a reviewer audits the wrong thing.
+
+Two thirds of the *rows* have a known `rsid` that is simply absent from the crosswalk, but nine
+tenths of the distinct *spellings* have no `rsid` at all. That asymmetry is why the workbook
+carries two grains.
+
+### Two samples, two denominators
+
+`n = 100` each, `seed 20260914`, `ORDER BY hash(seed, key) LIMIT n` — never `USING SAMPLE`.
+
+- `Amostra_escolas` — distinct `(university_raw, global_oa_country_code)`, 8q's own decision key,
+  each row carrying `n_rows` / `n_users` / `n_decisions` / per-level counts so the draw can be
+  weighted back. 0.0172% of 582,781; weight 5,828. This is the sheet that explains the failure.
+- `Amostra_entradas` — the education row itself, frequency-weighted. 0.0042% of 2,380,198;
+  weight 23,802. This is what a typical unmatched entry looks like.
+
+There is no single rate to read off this workbook, and the `Resumo` sheet declares both
+denominators so nobody quotes one. The realized draws came out at 85/15 on the two failure
+routes and 85/14/1 on bachelor/master/phd.
+
+The drawn rows make the label trap concrete: an `Anhanguera Educacional` entry with Revelio
+`degree = 'High School'` and `degree_raw = 'Bacharelado'` is correctly a bachelor here, which is
+the same defect §"Revelio's `degree` is unreliable on Brazilian records" measured.
+
+### Products and guards
+
+```
+revelio_br_cohort/unmatched_valid_degree_sample.parquet   the parked keys
+revelio_br_cohort/unmatched_valid_degree_sample.xlsx      the workbook
+```
+
+The parquet parks only the draw keys for both grains; the payload is rebuilt each run and the
+re-derived keys are `setequal`-checked against it, so a seed that stops reproducing fails loudly.
+The six population counts above are `stopifnot` constants, so a rebuilt 8q halts the sample
+rather than quietly drawing from a different population. `saveWorkbook(overwrite = FALSE)`, with
+`veredito`/`motivo` read back and rematched — by `(university_raw, country)` on one sheet and the
+physical `(source_file, source_row)` key on the other — before the old file is removed. `user_id`
+is written as text (int64 trap). The final readback asserts exact text identity on the free-text
+columns rather than only that nothing starts with `= + - @`, since `university_raw` is
+uncontrolled LinkedIn input; the formula-shaped-cell check is a warning here, not a stop.
+
+Re-running:
+
+```powershell
+Rscript prep/building_external_data/unmatched_valid_degree_sample.R
+```
+
+Nothing in the workbook flows back into the pipeline automatically.
+
+---
+
+## The residue is two populations — a ceiling and a defect (2026-09-14)
+
+Reading 8s's entry sample by hand raised the question of whether the unmatched pile is simply
+less-prestigious private institutions rather than ranked universities. Measured, that is
+directionally right and attributes the residue to the wrong cause. Split the valid-degree
+education rows by whether `university_raw` names a large or public Brazilian university (USP,
+UNICAMP, UNESP, the UF\* federals, UnB, PUC, FGV, ITA, "universidade federal/estadual"):
+
+| group | rows | matched | match rate | unmatched |
+|---|---:|---:|---:|---:|
+| names a large/public university | 2,146,443 | 2,098,423 | **97.8%** | 48,020 |
+| everything else | 9,966,150 | 7,633,972 | **76.6%** | 2,332,178 |
+
+So 98% of the residue is "everything else", and the largest unmatched spellings are private
+teaching groups: UniFatecie (15,568 rows), Fametro, UNIESP, Doctum, Eniac, Grupo Projeção, UNIP,
+Univel, UniDomBosco, UniFECAF, UNIABEU.
+
+### The private residue is a catalog ceiling, not a matcher defect
+
+The snapshot holds **1,947 Brazilian institutions**, because OpenAlex indexes research-producing
+bodies and Brazil has thousands of teaching-only faculdades that publish nothing. Checked
+directly against `catalog.parquet`, **10 of the 12 largest unmatched private names are absent
+from the snapshot entirely** — UniFatecie, Fametro, UNIESP, Doctum, Eniac, Projeção, Univel,
+UniDomBosco, Uniamérica, UniFECAF. UNIABEU *is* present (1,657 works) and still unmatched, a real
+miss. "UNIP" has no Brazilian entry at all; the only catalog hit is Juniper Networks.
+
+These rows are **unmatchable, not mismatched**. No scorer improvement recovers them. Do not
+re-open this population, and do not widen any matching arm to reach it — a loose arm there
+manufactures false matches against a catalog that does not contain the right answer.
+
+### The fixable half, and script 8t
+
+The other 48,020 rows name institutions that **are** in the catalog with large publication
+records and failed anyway: PUC-Campinas 10,781 works, PUC Minas 18,336, UFSJ 14,897, UFSCar
+78,408. UESB (4,935 rows) is a genuine absence. The failure is of *name*, not of score — 8q only
+scores inside a candidate set, and these arrived with an empty one. Three observed shapes:
+faculty sub-units (`Escola Politécnica da UFRJ`, `EESC-USP`, `ECA-USP`, `FMRP da USP`), bare or
+hyphenated acronyms (`UFRJ`, `UFSCar`, `PUC-RS`), and decorated spellings (`UFSCar - Alumni`,
+`UFSJ OFICIAL`, `POLI USP PRO`).
+
+`ranked_subunit_rescue.R` proposes candidates for exactly that population,
+restricted to the CWUR BR 52 + Shanghai ≤ 901 catalogs (964 canonical ids, 3,230 folded aliases,
+3,164 surviving the unique-owner guard). Three disjoint arms over the 411,416 unmatched
+valid-degree spellings:
+
+| arm | spellings | rows | users |
+|---|---:|---:|---:|
+| `sigla_contida` (acronym contained in the text) | 7,736 | 35,922 | 34,350 |
+| `exato` (folded equality) | 634 | 24,316 | 22,063 |
+| `decorado` (decoration stripped, then equality) | 28 | 329 | 286 |
+| **total** | **8,398** | **60,567** | **56,699** |
+
+Read the coverage against the right denominator: **37,146 of those rows are on Brazilian ranked
+institutions, 77.4% of the 48,020 target**; the other 23,421 are on foreign ranked institutions
+(Technion, PSL, NOVA de Lisboa) that the 48,020 measurement never counted. Dividing the total by
+the Brazilian target gives 126%, which is the kind of number this folder exists not to publish.
+
+### Three guards, and the false positives that justify each
+
+A draft without guards produced, among its 20 largest: `PUC-Campinas`, `PUC Minas` and `PUC-RS`
+all collapsed onto the single owner of the bare acronym `puc` — three distinct universities,
+7,242 rows of garbage.
+
+- **G1 unique owner.** An alias claimed by more than one ranked institution is discarded with no
+  tie-break. Inherited from 16a note 2; 66 aliases die here.
+- **G2 family prefix.** If another ranked institution has an alias beginning with the acronym
+  plus a space, the acronym names a family, not an institution. Bare `puc` is owned by
+  I162148367 but `puc rio` is I2699952, so `puc` dies — and `PUC-Campinas` stops being proposed
+  while `PUCPR`, `PUC-Rio`, `PUC-RS` and PUC Chile still match exactly on their own full
+  acronyms. Six acronyms die here: `ita`, `ku`, `puc`, `tu`, and two Chinese names.
+- **G3 acronyms only, 3+ characters,** in the containment arm. No floor beyond that — 16a note 3
+  measured that a blind 4-character cut throws away `USP`, `UFC` and `UnB` to avoid `PUC`.
+
+What the guards cannot decide is marked in `risco` rather than dropped, because the same rule
+cuts both ways: `NOVA` legitimately matches `NOVA-IMS` (1,443 rows) and `NOVA School of Law`
+(588) and wrongly matches `Faculdade Nova Roma` (787), `Nova Faculdade` (483) and `Faculdade
+Canção Nova` (467) — `nova` is an ordinary Portuguese adjective. 1,087 spellings carry
+`alto: sigla e palavra comum` and 33 carry `alto: grafia de convenio` (`Strong Business School
+Conveniada FGV` is not FGV). The remaining 6,616 are `medio`, and the 662 exact/decorated
+spellings are `baixo`.
+
+### This stage proposes; it does not resolve
+
+Like 16a, it writes candidates and stops. No flag is published and no 8q decision is
+overwritten — the hierarchy's products are in `protected_paths` and their MD5s are re-checked at
+the end. The review file is written under a different name (`..._candidates.csv`) from the
+hand-filled one (`..._class.csv`), so a re-run cannot erase a review. Every proposed id is
+verified present in the 120,658-record snapshot.
+
+Two Excel round-trip traps this script had to step around, both representation rather than
+corruption, both normalized on **both** sides so real mangling still fails: Excel rewrites CRLF
+as LF, and its XML reader decodes the literal `&quot;` that LinkedIn escapes into raw text (a
+real spelling: `UNESP ... &quot;Julio de Mesquita Filho&quot;`). The display column is also
+stripped of U+FFFC, LinkedIn's "adicionar uma foto" placeholder, which carries no information and
+was the third source of spurious diffs.
+
+```powershell
+Rscript prep/building_external_data/ranked_subunit_rescue.R
+```
+
+---
+
+## Auditing the degree classifier — script 8u (2026-09-14)
+
+The whole `_degree_duration` cohort rests on one classifier: the ordered cascade in
+`br_degree_patterns.R` plus the duration fallback. Its accuracy had never been measured on this
+cohort. The folder's only degree-level audit, `shanghai_flag_audit.R`, reports 99.2% four-class
+accuracy, but its ground truth was written by an LLM — the same agent that wrote the patterns
+under test, which that section itself calls "a self-assessment with a conflict of interest."
+`degree_class_audit.R` builds the workbook for a human to check it.
+
+### The winning arm is reconstructable, exactly
+
+No artifact in this folder recorded **which** arm assigned a row its level. Decomposing
+`sql_ranked_level` into its ordered predicates and taking the first TRUE reproduces the stored
+`ranked_level` with **zero discrepancies across all 19,710,307 rows**. That assertion is the drift
+guard, and it replaces calling the constant directly — `education_flags_audit_500.R:111`
+hand-rebuilds the same expression instead, which the patterns file's own header warns against.
+
+| arm | test | → | rows | users | no `degree_raw` |
+|---|---|---|---:|---:|---:|
+| A0 | `rx_hs` | other | 1,567,296 | 1,366,609 | 0 |
+| A1 | `rx_notdeg` | other | 109,463 | 100,200 | 0 |
+| A2 | `degree='Doctor'` OR `rx_phd` | phd | 128,651 | 121,520 | 583 |
+| A3 | `degree IN ('Master','MBA')` OR (`NOT rx_lato` AND `rx_msc`) | master | 1,559,397 | 1,356,840 | 6,284 |
+| A4 | `rx_notdeg_weak` | other | 61,155 | 44,425 | 0 |
+| A5 | `rx_post16` AND NOT `rx_bach16` | other | 1,231,898 | 987,799 | 0 |
+| A6 | `sql_is_bachelor` OR `rx_bach16` | bachelor | 7,677,911 | 6,837,326 | 16,419 |
+| A7 | terminal `ELSE` | other | 4,627,902 | 2,816,084 | 742,918 |
+| A7+dur | terminal `ELSE`, rescued by duration | **bachelor** | **2,746,634** | 2,601,690 | **789,483** |
+
+Arms A0, A1, A4 and A5 have **no** rows without raw text, because each fires on a regex over that
+text. A6's 16,419 textless rows come from `sql_is_bachelor`'s first clause, `degree = 'Bachelor'`
+— the label, not the text. Together with A7+dur's 789,483, that is the 805,902 bachelors carrying
+no textual evidence at all.
+
+### The duration fallback has four conditions, not two
+
+Worth stating because "empty degree plus a 3–6 year gap" is the natural shorthand and it is wrong:
+
+```
+coalesce(degree,'empty') = 'empty'
+AND sql_ranked_level = 'other'
+AND NOT rx_explicit_non_bachelor     -- rx_notdeg ∪ rx_notdeg_weak ∪ rx_post ∪ rx_post16
+                                     --   ∪ rx_tech ∪ rx_hs ∪ post[ -]?grad ∪ técnic
+AND startdate IS NOT NULL AND enddate IS NOT NULL
+AND end_year - start_year IN (3,4,5,6)
+```
+
+The third condition is why the rescue reaches only the terminal `ELSE` and never A0, A1, A4 or A5
+— confirmed: all 2,746,634 rescued rows come from A7, none from any other arm. A reviewer told
+only the shorthand would hunt for rescued `Ensino Médio` rows, find none, and file the absence as
+a defect. The `Como ler` sheet states the full rule.
+
+### Two stratified samples, and why neither yields a single rate
+
+`Amostra_positivos` is stratified by level, with bachelor split by arm because the two bachelor
+arms are not the same classifier. `Amostra_negativos` is stratified by rejecting arm, so each
+rejection rule gets its own precision and the terminal `ELSE` — the only arm where a genuine false
+negative can hide — gets the largest share.
+
+| side | stratum | population | drawn | weight |
+|---|---|---:|---:|---:|
+| positive | P1 bachelor A6 ranked regex | 7,677,911 | 25 | 307,116 |
+| positive | P2 bachelor A7+dur (no text) | 2,746,634 | 25 | 109,865 |
+| positive | P3 master A3 | 1,559,397 | 30 | 51,980 |
+| positive | P4 phd A2 | 128,651 | 20 | 6,433 |
+| negative | N1 other A7 terminal `ELSE` | 4,627,902 | 30 | 154,263 |
+| negative | N2 other A0 `rx_hs` | 1,567,296 | 20 | 78,365 |
+| negative | N3 other A5 `rx_post16` | 1,231,898 | 20 | 61,595 |
+| negative | N4 other A1 `rx_notdeg` | 109,463 | 15 | 7,298 |
+| negative | N5 other A4 `rx_notdeg_weak` | 61,155 | 15 | 4,077 |
+
+Seed `20260914`, `ORDER BY hash(seed, source_file, source_row) LIMIT n` per stratum, never
+`USING SAMPLE`. **There is no single rate to read off this workbook** — every stratum carries its
+own weight on the `Resumo` sheet, and a raw count over the 200 rows is wrong by construction. P2
+is over-represented 2.8× relative to P1 on purpose.
+
+The reviewer fills `nivel_correto` with the *true* level (`bachelor`/`master`/`phd`/`other`/
+`indeterminado`) rather than a yes/no, so the same 200 rows yield both four-class accuracy and
+per-arm precision.
+
+### Verified on the drawn sample
+
+Arm attribution lands where it should: `Pós-graduação Lato Sensu - Especialização` → A5,
+`Técnico em Edificações` and `Curso Técnico Integrado` → A0, `Intercâmbio Acadêmico` and
+`Graduação Sanduíche` → A1, `Bacharelado em Direito` → A6/`6a degree=Bachelor`, bare `graduação`
+→ A6/`6c rx_b2`.
+
+The draw also turned up candidate defects for the reviewer to rule on, which is the point —
+`Bachelor of Economics - Minor in Math`, carrying `degree = 'Bachelor'`, is rejected to `other` by
+A1 because `rx_notdeg` matches `minor`; and `Graduation Diploma` falls to the terminal `ELSE`
+because `rx_b2`'s `gradua[cç][aã]o` is Portuguese and does not reach the English word. Neither is
+recorded here as an error: nothing is a defect until a human marks it one.
+
+```powershell
+Rscript prep/building_external_data/degree_class_audit.R
+```
+
+Accuracy is deliberately **not** recorded in this section or in the report — `reviewed: false`
+until `nivel_correto` is filled in.
+
+---
+
+## Degree-duration e-MEC institution codes — scripts 8v–8w (2026-09-16)
+
+`emec_hierarchy.R` assigns an e-MEC `CO_IES` to the refreshed cohort's
+OpenAlex-enriched education rows. It is a separate local, offline product: all 37 source and
+`global_oa_*` columns travel unchanged, and nothing under `global_oa_hierarchy/`
+is overwritten.
+
+The source is `Data/raw/PDA_Lista_Instituicoes_Ensino_Superior_do_Brasil_EMEC.csv`: 4,328 unique
+codes, 3,117 active or in activity and 1,211 extinct. Its 4,188 folded official names contain 128
+collisions, up to six codes per name. Those collisions are data, not rows to deduplicate.
+
+### The OpenAlex selector is reused with conservative publication guards
+
+Candidate supply follows 8q exactly: only folded official and parenthetical-cleaned names create
+raw/`rsid` links; `SIGLA` participates only after a candidate set exists. Blank acronyms, the
+literal string `null`, punctuation-only values and values with fewer than three alphanumeric
+characters are discarded. This matters because e-MEC acronyms have substantial duplicate and
+sentinel content.
+
+The decision grain remains original-case `university_raw`, `global_oa_country_code` and candidate
+set. `rsid` supplies candidates when present; direct C_norm is the fallback only for a missing or
+sentinel `rsid`. The shared hierarchy SQL proposes normalized equality, contained name, supplied
+acronym, then the same 0.2-country/0.8-Jaro-Winkler score. Exact score ties survive. There is no
+code-order tie-break and no similarity floor.
+
+Publication adds conservative e-MEC guards: stage 4 is always diagnostic; a stage-3 acronym is
+diagnostic if it has multiple catalog owners or occurs only as an embedded uppercase token rather
+than the whole raw value or a complete delimited segment; and a stage-2 generic containment is
+diagnostic when a leftover distinctive raw token identifies another candidate. The corresponding
+statuses are `unresolved_fuzzy_unvalidated`, `unresolved_ambiguous_acronym`,
+`unresolved_contextual_acronym` and `unresolved_containment_conflict`.
+
+Every e-MEC candidate is Brazilian, so country contributes the same amount to every candidate and
+cannot rank them. It remains in the key and evidence for compatibility and audit. Foreign and
+missing-country assignments therefore need to be read as `rsid`/name evidence, not as country
+confirmation.
+
+After the shared selector, a stage-1-to-3 tied result is reduced only if exactly one winner is
+`Ativa` or `Em atividade` **and** all tied candidates share one nonmissing normalized
+municipality/UF. The pre-status winners remain in the product and `emec_active_preference = 1`
+marks the change. Cross-location, multiple-active and no-active ties stay tied; a uniquely selected
+extinct code remains valid. Scalar `CO_IES` exists if and only if the final publishable selected
+count is one.
+
+### Measured production result
+
+The run covers all **19,710,307 rows / 8,901,904 users / 1,806,268 decisions**. It uniquely assigns
+`CO_IES` to **7,371,101 rows (37.4%)**, **5,293,460 users (59.5%)** and 74,865 decisions. Another
+306,718 rows remain tied and 12,032,488 are unresolved or diagnostic-only. The location-constrained
+sole-active rule resolves 28,654 row assignments while retaining the original tied evidence.
+
+| effective level | rows | uniquely matched | share |
+|---|---:|---:|---:|
+| bachelor | 10,424,545 | 5,288,940 | 50.7% |
+| master | 1,559,397 | 521,323 | 33.4% |
+| PhD | 128,651 | 63,380 | 49.3% |
+| other | 7,597,714 | 1,497,458 | 19.7% |
+
+The 7.37 million unique rows comprise 4,792,912 equality, 1,408,695 containment and 1,169,494
+acronym-stage rows; score-stage proposals publish no code. Diagnostics retain 137,113 containment-
+conflict rows, 353,286 ambiguous-acronym rows, 174,744 contextual-acronym rows and 3,894,726 fuzzy
+rows. Source-country reporting remains part of the audit: 3,807,217 of 4,602,051 BR-labelled rows
+match, but so do 229,116 AR-labelled rows and 137 US-labelled rows. Because the catalog is all-BR,
+country is evidence context rather than confirmation.
+
+### Products, verification and bounded review
+
+`emec_hierarchy/degree_duration_emec_crosswalk.parquet` is the compact contextual
+decision table. The directory also carries the normalized catalog and aliases, raw/`rsid`
+evidence, 64 decision and evaluation parts, 30 enriched education parts, manifests and the JSON
+build report. Public codes are `BIGINT`, including arrays and nested evidence; the shared SQL's
+temporary `oa_id` adapter never appears in a public schema. `CODIGO_MUNICIPIO_IBGE` remains text so
+its leading zeros survive.
+
+`verify_emec_hierarchy.R` independently re-read all inputs and outputs, compared
+every upstream column by physical key over all 30 partitions, rechecked catalog/code/tie/status and
+all four publication-guard invariants, and recomputed complete decision buckets 0 and 37 through
+the shared selector. The published verification passed every check.
+
+`emec_audit_sample.R` replaces repeated broad agent review with a parked,
+fingerprinted sample of exactly 100 decisions: 15 high-volume and 15 deterministic draws from each
+of stages 1 and 2; 15 high-volume and 10 deterministic publishable stage-3 decisions; five active-
+preference decisions; and five each from the stage-3 and stage-4 quarantines. Unless an explicit
+source sample is supplied, reruns reuse the same decision IDs and validate all fingerprints and
+checksums. The bounded independent review is `PASS_WITH_NOTES`: **96 correct, 3 plausible, 0
+incorrect and 1 unclear**. Four initially incorrect decisions (814117, 1589806, 1731593 and 776567)
+are now nonpublishing ties/conflicts. Decision 993556 remains unclear because its generic raw name
+does not establish the proposed extinct institution; it is recorded in
+`degree_duration_emec_audit_review.json` rather than generalized into a broad rule.
+
+```powershell
+Rscript prep/building_external_data/global_oa_hierarchy_tests.R
+Rscript prep/building_external_data/emec_hierarchy_tests.R
+Rscript prep/building_external_data/emec_hierarchy.R
+Rscript prep/building_external_data/verify_emec_hierarchy.R
+Rscript prep/building_external_data/emec_audit_sample.R
+```
+
+The build is checksummed and resumable. A changed input or implementation refuses to reuse old
+checkpoints, and completed decision or education partitions are verified by checksum before use.
+
+---
+
+## Regex-v1 recovery for canonical e-MEC codes — scripts 8x–8y (2026-09-16)
+
+`emec_regex_recovery.R` is a separate, versioned postprocessor over the checked
+8v product. It operates only on the latest `_degree_duration` cohort, never changes an existing
+scalar `CO_IES`, and extends the decision key with `university_name` and `university_country`.
+Explicitly non-Brazilian records are excluded. A selected target is added to the candidate set and
+must resolve to an active current catalog record; different targets tied at the best rule priority
+remain unresolved.
+
+The reusable rules are normalized/translated exact and core-name equality, guarded name
+containment, candidate- or municipality-supported catalog brand tokens, unique active acronyms and
+catalog brands. Ten requested aliases, including generic Estácio and Anhanguera forms, live in
+`emec_regex_aliases.csv`. The registry contains regexes and target-name/location
+constraints rather than numeric `CO_IES`; every target is resolved dynamically and must be unique
+in the active catalog before the build continues.
+
+The completed attempt covers the unchanged **19,710,307 rows / 8,901,904 users**. It raises unique
+assignments from **7,371,101 to 11,746,464 rows** and from **5,293,460 to 7,131,042 users**. The
+regex layer assigns 4,375,363 rows / 3,265,083 users. By effective degree level:
+
+| effective level | rows | matched after regex v1 | regex-recovered |
+|---|---:|---:|---:|
+| bachelor | 10,424,545 | 7,664,778 | 2,375,838 |
+| master | 1,559,397 | 918,099 | 396,776 |
+| PhD | 128,651 | 75,837 | 12,457 |
+| other | 7,597,714 | 3,087,750 | 1,590,292 |
+
+The fixed 100-row unmatched review fixture passes its intended local acceptance criterion: all
+**57/57** manually identified recoverable rows receive their expected `CO_IES`, while all **43/43**
+reviewed rejections remain unmatched. The independent verifier also found zero changed base scalar
+matches, zero selected conflicts, zero explicitly foreign recoveries, zero inactive or missing
+targets and zero selected codes outside the augmented candidate sets. All 30 education partitions
+preserve every non-e-MEC source value by physical key.
+
+### Independent precision review: do not publish regex v1
+
+Passing the fixed sample does **not** establish generalizability. The final independent review found
+a blocking false-positive path in the unique-acronym proposal: a unique active acronym with at most
+six characters is accepted without candidate, municipality or institution-form support. That arm
+accounts for **1,032,244 rows / 118,665 decisions**. Two concrete failure groups are:
+
+- `INC` assigns 9,783 rows to `CO_IES = 24522` (Instituto Nacional de Cardiologia), although only
+  two rows mention cardiology; unrelated company and college names make up the remainder.
+- `CATÓLICA` assigns 12,838 rows to `CO_IES = 2723` in Recife, although only one row mentions that
+  target and at least 2,185 rows are visibly Portuguese/Portugal institutions.
+
+The formal foreign-country invariant is narrower than name-based reality: null country metadata is
+allowed, so an obviously foreign name can still be recovered when both country fields are missing.
+Generic Estácio and Anhanguera labels are also canonicalized to one Rio de Janeiro and one Leme
+legal entity respectively (444,819 and 317,881 rows); this is the requested convention, not evidence
+that the raw label identifies that particular campus/legal entity. Finally,
+`emec_regex_selected` is nullable: no proposal produces `NULL`, a conflict produces `FALSE`, and a
+selection produces `TRUE`. Consumers must use `coalesce(emec_regex_selected, false)`.
+
+For those reasons `emec_hierarchy_regex_v1/` retains rule-level provenance and
+must not be interpreted as uniform semantic precision. The unified identity
+product nevertheless exposes this version as final `CO_IES`, while retaining
+the conservative 8v value separately as `CO_IES_base`. CAPES-v1 replication
+uses the base column; the regex-v1 CAPES variant is published separately for
+comparison. No further rule iteration was made after this review.
+
+`emec_regex_sample_export.R` draws a second review sample from the final attempt:
+100 valid Bachelor/Master/PhD rows with a scalar `CO_IES` and 100 still unmatched rows. Seed
+20260917 and hash ordering make it reproducible, and all 200 physical keys from the first workbook
+are explicitly excluded. The generated workbook keeps the groups in separate `Matched` and
+`Unmatched` sheets and includes regex rule/proposal evidence plus blank review columns.
+
+```powershell
+Rscript prep/building_external_data/emec_regex_recovery.R
+Rscript prep/building_external_data/emec_regex_recovery_tests.R
+Rscript prep/building_external_data/verify_emec_regex_recovery.R
+Rscript prep/building_external_data/emec_regex_sample_export.R
+```
 
 ---
 
@@ -7518,7 +8035,7 @@ family with Brazilian CWUR while retaining Shanghai, unicorn and top-tech-compan
 not overwrite the source position parquet or the legacy employer products. The first two stages are
 local, online preparation and must not be sent to SEDAP; the final join is local and offline.
 
-`degree_duration_ranked_university_company_rcid.R` normalizes the ranking, OpenAlex display and
+`ranked_university_company_rcid.R` normalizes the ranking, OpenAlex display and
 cleaned names with trim, lowercase and NFD accent removal, then requires whole-field equality to
 `revelio_database.academic_company_ref.company`. It expands each hit across `rcid`, `child_rcid`
 and `ultimate_parent_rcid`. Exact supplied ranking names are shared between CWUR and Shanghai only
@@ -7534,7 +8051,7 @@ The five CWUR institutions with no exact `academic_company_ref` hit are UERJ, CB
 INPA. The regression check retains all established Shanghai triples plus all 18 overlapping
 Brazilian institutions and their 41 prior RCIDs.
 
-`obmep_candidates_step_1_degree_duration_position_rcid.R` unloads only `user_id`, `position_id`,
+`obmep_candidates_step_1_position_rcid.R` unloads only `user_id`, `position_id`,
 `rcid` and `ultimate_parent_rcid`. Its local validation found **37,984,489** rows and distinct
 positions, **8,901,904** users, 29,694,887 non-null direct RCIDs and 29,694,859 non-null ultimate
 parent RCIDs. Both directions of the anti-join against the downloaded position product returned
@@ -7551,7 +8068,7 @@ Both query ledgers are accepted, the registration DDL scanned zero bytes, and `A
 Explorer. September through the 11th contains 217 queries, 115 scanning queries and
 4,063,758,206,400 scanned bytes.
 
-`degree_duration_firm_flags.R` reuses the established 468 corporate RCIDs plus 13 uniquely rescued
+`firm_flags.R` reuses the established 468 corporate RCIDs plus 13 uniquely rescued
 cohort URL mappings, tests both position keys, and writes positive matches only:
 
 | output measure | positions | users |
@@ -7564,17 +8081,17 @@ cohort URL mappings, tests both position keys, and writes positive matches only:
 | CWUR or Shanghai workplace | 752,088 | 458,258 |
 
 The position output is
-`revelio_br_cohort/obmep_candidates_step_1_degree_duration_firms_positions.parquet`; the unique-user
-rollup is `revelio_br_cohort/obmep_candidates_step_1_degree_duration_firms.parquet`. The report is
-`revelio_br_cohort/degree_duration_firm_flags_report.json`. Tests cover exact normalization, the
+`revelio_br_cohort/obmep_candidates_step_1_firms_positions.parquet`; the unique-user
+rollup is `revelio_br_cohort/obmep_candidates_step_1_firms.parquet`. The report is
+`revelio_br_cohort/firm_flags_report.json`. Tests cover exact normalization, the
 three company-reference RCID roles, direct and ultimate-parent matching, URL-rescue ambiguity,
 BIGINT identifiers, family collisions, binary flag relations and independent user aggregation.
 
 ```powershell
-Rscript prep/building_external_data/degree_duration_firm_flags_tests.R
+Rscript prep/building_external_data/firm_flags_tests.R
 Rscript prep/building_external_data/ranked_university_company_rcid_tests.R
 Rscript prep/building_external_data/cwur_openalex_crosswalk_tests.R
-Rscript prep/building_external_data/degree_duration_ranked_education_flags_tests.R
+Rscript prep/building_external_data/ranked_education_flags_tests.R
 ```
 
 The completed online scripts intentionally refuse to overwrite their products. A fresh Athena run
@@ -7583,7 +8100,7 @@ published products merely to rerun the query.
 
 ### Degree-duration selected profiles and CAPES match (2026-09-11)
 
-`obmep_candidates_selected_degree_duration.R` is the local, offline selection stage for the
+`obmep_candidates_selected.R` is the local, offline selection stage for the
 refreshed cohort. It unions every user with at least one of six headline flags: CWUR or Shanghai
 education, or unicorn, top-tech, CWUR or Shanghai employment. The three positive-user inputs have
 1,565,520, 1,371,845 and 661,872 users respectively; their deduplicated union has **2,289,937
@@ -7592,14 +8109,15 @@ LinkedIn-name chunks supplies `fullname` for **2,288,180 (99.9233%)**. Missing n
 selection with `fullname = NULL`.
 
 The 91-column output is
-`revelio_br_cohort/obmep_candidates_selected_degree_duration.parquet`. The education and employer
+`revelio_br_cohort/obmep_candidates_selected.parquet`. The education and employer
 sources both use `cw_*` for different questions, so this combined file renames them to
 `cw_degree_*` and `cw_work_*`. Shanghai education remains `sh_*`, Shanghai employment remains
 `sw_*`, and the unicorn and top-tech families remain `un_*` and `tc_*`. Binary flags and counts on
 an absent side are zero; ranks, years, names and arrays remain NULL. The legacy selected file is
 checksummed before and after publication and is not changed.
 
-The CAPES scripts accept `OBMEP_MATCH_COHORT=degree_duration`; `legacy` remains the default. The
+The CAPES scripts accept `OBMEP_MATCH_COHORT=degree_duration`, which is now the default compatibility
+value for the canonical cohort. The archived legacy cohort must be selected explicitly. The
 cohort selector routes the selected-profile file and its 19-column education history together, so
 they cannot be mixed independently. The matcher validates that schema and projects the same 12
 matching fields used by the legacy run. The seven-slot keys, exact first-name block, institution
@@ -7622,7 +8140,7 @@ are candidate tables, not resolved 1:1 identity maps, and all their outputs cont
 Run the completed local path in this order:
 
 ```powershell
-Rscript prep/building_external_data/obmep_candidates_selected_degree_duration.R
+Rscript prep/building_external_data/obmep_candidates_selected.R
 $env:OBMEP_MATCH_COHORT = "degree_duration"
 $env:OBMEP_MATCH_ARM = "both"
 Rscript prep/building_external_data/capes_obmep_candidates_name_match.R
@@ -7640,6 +8158,137 @@ Remove-Item Env:\OBMEP_MATCH_COHORT
 
 This entire extension is local and scanned no Athena data. It therefore incurred no Athena cost
 and required no AWS monthly-cost tracker refresh.
+
+#### CAPES match with CO_MANTENEDORA buckets (2026-09-16)
+
+The e-MEC extension provides a second, separate institution-key experiment for the latest
+`degree_duration` cohort. `capes_emec_mantenedora_crosswalk.R` first recreates the script-24 CAPES
+population exactly: **733,879 degree rows, 567,270 people, birth year at least 1988**. It assigns
+`CO_IES` from a unique native CAPES code where available, then from a unique exact later-CAPES name,
+and finally from a unique exact normalized e-MEC name. Ambiguous names stay unresolved. Joining the
+2024 Higher Education Census then supplies `CO_MANTENEDORA`.
+
+This reaches **701,862 CAPES degree rows with `CO_IES`**. Of them, **693,252** use a maintainer key
+and **8,610** use the IES fallback; **32,017** rows remain without an institution bucket. The key is
+explicitly prefixed as `M:<CO_MANTENEDORA>` or `I:<CO_IES>`, so codes from the two namespaces can
+never collide. `CO_MANTENEDORA` is the legal Census maintainer, not a researched ultimate corporate
+or academic parent. It is nevertheless the appropriate reproducible parent-equivalent available on
+both sides of this match.
+
+Set `OBMEP_MATCH_INST_KEY=mantenedora` to use this route. It is valid only with
+`OBMEP_MATCH_COHORT=degree_duration` and with an explicit `msc` or `phd` arm. All other buckets and
+matching rules remain in force: exact first name, degree start year, the seven-position key,
+Jaro-Winkler surname combinations, the 0.90 conservative gate and the existing placebo construction.
+Only the institution positions change. Master's and PhD institutions are never pooled or allowed to
+substitute for one another.
+
+| conservative product | pairs | CAPES people | users | pairs compared | placebo B people | excess people |
+|---|---:|---:|---:|---:|---:|---:|
+| master's maintainer arm | 144,987 | 130,556 | 136,650 | 986,343 | 5,979 (4.58%) | 124,577 |
+| doctorate maintainer arm | 37,951 | 34,872 | 37,431 | 148,869 | 891 (2.56%) | 33,981 |
+| **deduplicated maintainer union** | **153,786** | **138,368** | **144,860** | — | **6,772 (4.89%)** | **131,596** |
+
+The union has 115,835 pairs only through the master's arm, 8,799 only through the PhD arm and
+29,152 through both. It records these as `in_msc`, `in_phd` and `matched_arm`; it also exposes the
+original `CO_IES`, `CO_MANTENEDORA` and prefixed bucket for each side and degree. These remain
+candidate pairs, not a resolved 1:1 person crosswalk, and they contain civil names.
+
+The person totals below are deduplicated by CAPES `person_key`, not counts of candidate pairs. The
+two OpenAlex totals answer different questions and must not be interchanged: the canonical product
+uses the stricter joint master/PhD key, whereas the OpenAlex arm union accepts a conservative match
+through either independently blocked degree arm.
+
+| conservative person-level product | unique CAPES people | share of 567,270 |
+|---|---:|---:|
+| canonical OpenAlex joint key | 123,778 | 21.82% |
+| separate OpenAlex master/PhD arm union | 152,044 | 26.80% |
+| e-MEC `CO_MANTENEDORA`/`CO_IES` arm union | 138,368 | 24.39% |
+| **union of the OpenAlex-arm and e-MEC-arm products** | **154,290** | **27.20%** |
+
+The last union contains **136,122** CAPES people found by both arm-union products, **15,922** found
+only by the OpenAlex arm union and **2,246** found only by the e-MEC arm union. Thus the e-MEC route
+adds 2,246 unique CAPES people beyond the analogous OpenAlex arm union. For comparison with the
+older approximately 120-thousand figure, use the canonical OpenAlex row (**123,778**), not the
+separate-arm OpenAlex union.
+
+Outputs are isolated from every OpenAlex product:
+
+```text
+capes_discentes/capes_masters_doctorates_born_1988plus_2004_2024_emec_mantenedora.parquet
+capes_discentes/capes_emec_mantenedora_report.json
+capes_discentes/capes_obmep_match_degree_duration_mantenedora_msc/
+capes_discentes/capes_obmep_match_degree_duration_mantenedora_phd/
+capes_discentes/capes_obmep_match_union_degree_duration_mantenedora/
+    capes_obmep_match_candidates.parquet
+    capes_obmep_match_summary.csv
+    capes_obmep_match_placebo.parquet
+    capes_obmep_match_audit_sample.parquet
+    capes_obmep_match_audit_sample.xlsx
+```
+
+The workbook parks a deterministic 100-pair sample and reconstructs the exact degree rows used to
+form each arm. Its summary formulas, reviewer dropdown and two-sheet layout were rendered and
+checked; no formula errors were present.
+
+Run this local, offline route after the production e-MEC hierarchy exists:
+
+```powershell
+Rscript prep/building_external_data/capes_emec_mantenedora_crosswalk.R
+$env:OBMEP_MATCH_COHORT = "degree_duration"
+$env:OBMEP_MATCH_INST_KEY = "mantenedora"
+$env:OBMEP_MATCH_CO_IES_VERSION = "base"
+$env:OBMEP_MATCH_ARM = "msc"
+Rscript prep/building_external_data/capes_obmep_candidates_name_match.R
+Rscript prep/building_external_data/capes_obmep_match_placebo.R
+$env:OBMEP_MATCH_ARM = "phd"
+Rscript prep/building_external_data/capes_obmep_candidates_name_match.R
+Rscript prep/building_external_data/capes_obmep_match_placebo.R
+Rscript prep/building_external_data/capes_obmep_match_union.R
+Rscript prep/building_external_data/capes_obmep_mantenedora_audit_sample.R
+Rscript prep/building_external_data/capes_obmep_mantenedora_tests.R
+Remove-Item Env:\OBMEP_MATCH_ARM
+Remove-Item Env:\OBMEP_MATCH_INST_KEY
+Remove-Item Env:\OBMEP_MATCH_CO_IES_VERSION
+Remove-Item Env:\OBMEP_MATCH_COHORT
+```
+
+Like the rest of the CAPES match, this route is local and scans no Athena data.
+
+#### Regex-v1 CAPES–LinkedIn variant (2026-09-16)
+
+The regex-v1 route changes only the LinkedIn-side `CO_IES` source. It reads the
+row-faithful unified identity parts and keeps the CAPES `CO_MANTENEDORA`/IES
+bucket construction, name rules, year rules, thresholds and placebo design
+unchanged. It writes to distinct `_mantenedora_regex_v1_{msc,phd}` arm
+directories and `_union_degree_duration_mantenedora_regex_v1` union directory.
+
+| product | pairs | CAPES people | LinkedIn users | placebo people |
+|---|---:|---:|---:|---:|
+| master's regex-v1 arm | 163,699 | 147,047 | 154,296 | 6,739 |
+| PhD regex-v1 arm | 43,393 | 39,772 | 42,799 | 1,026 |
+| **deduplicated regex-v1 union** | **172,444** | **154,729** | **162,360** | **7,649 (4.94%)** |
+
+The union consists of 129,051 master-only pairs, 8,745 PhD-only pairs and
+34,648 pairs present through both arms. Its audit deliverables include a
+deterministic 100-row parquet sample and the rendered two-sheet workbook.
+Both the base and regex-v1 regression suites pass exact count, schema,
+deduplication, institution-bucket, placebo and audit assertions.
+
+```powershell
+$env:OBMEP_MATCH_COHORT = "degree_duration"
+$env:OBMEP_MATCH_INST_KEY = "mantenedora"
+$env:OBMEP_MATCH_CO_IES_VERSION = "regex_v1"
+$env:OBMEP_MATCH_ARM = "msc"
+Rscript prep/building_external_data/capes_obmep_candidates_name_match.R
+Rscript prep/building_external_data/capes_obmep_match_placebo.R
+$env:OBMEP_MATCH_ARM = "phd"
+Rscript prep/building_external_data/capes_obmep_candidates_name_match.R
+Rscript prep/building_external_data/capes_obmep_match_placebo.R
+Remove-Item Env:\OBMEP_MATCH_ARM
+Rscript prep/building_external_data/capes_obmep_match_union.R
+Rscript prep/building_external_data/capes_obmep_mantenedora_audit_sample.R
+Rscript prep/building_external_data/capes_obmep_mantenedora_tests.R
+```
 
 ---
 ---

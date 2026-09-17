@@ -1,4 +1,4 @@
-# Offline fixtures for degree_duration_ranked_education_flags.R.
+# Offline fixtures for ranked_education_flags.R.
 library(DBI)
 library(duckdb)
 con <- dbConnect(duckdb(),dbdir=':memory:')
