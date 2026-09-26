@@ -1,0 +1,11 @@
+rule_id,priority,source_raw_regex,source_name_regex,source_name_policy,target_name_regex,target_municipality_regex,target_uf,notes
+estacio_generic,10,^(universidade )?estacio( de sa)?$,^estacio de sa university$,required_match,^universidade estacio de sa$,^rio de janeiro$,RJ,Canonical Estacio group record
+anhanguera_generic,10,^anha(n)?guera( educacional)?$,^anhanguera university centre( unifian)?$,required_match,^centro universitario anhanguera$,^leme$,SP,Canonical Anhanguera record for generic group labels
+athon_esamc,10,^athon( ensino superior)?$,^athon( ensino superior)?$,if_present_match,^faculdade esamc sorocaba$,^sorocaba$,SP,Historical ESAMC Sorocaba branding
+mater_christi,10,^(faculdade( de ciencias e tecnologia)? )?mater christi$,,ignore,^faculdade unirb mossoro$,^mossoro$,RN,Historical Mater Christi name
+senac_poa,10,^faculdade senac porto alegre$,^senac faculty of porto alegre$,if_present_match,^centro universitario senac$,^porto alegre$,RS,Current Porto Alegre Senac record
+mauricio_recife,10,^faculdade mauricio de nassau$,^faculdade mauricio de nassau$,if_present_match,^centro universitario mauricio de nassau$,^recife$,PE,Recife campus for unqualified historical label
+unicastelo,10,(^| )unicastelo( |$)|universidade camilo castelo branco,(^| )unicastelo( |$)|universidade camilo castelo branco,if_present_match,^universidade brasil$,^sao paulo$,SP,UNICASTELO successor institution
+faciplac_uniceplac,10,(^| )faciplac( |$),(^| )uniceplac( |$),required_match,^centro universitario do planalto central apparecido dos santos$,^brasilia$,DF,FACIPLAC successor institution
+anhanguera_taboao,10,anhanguera tabo(a|ao) da serra$,,ignore,^faculdade anhanguera de taboao da serra$,^taboao da serra$,SP,Taboao da Serra campus spelling variants
+uninga,10,^uninga$,,ignore,^centro universitario inga$,^maringa$,PR,Brand spelling differs from official name
