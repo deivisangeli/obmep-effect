@@ -11,9 +11,10 @@
 >
 > University identity is now built before education flags by
 > `build_university_raw_oa_co_ies_crosswalk.R`. The row-faithful output uses
-> `(source_file, source_row)`, assigns `OA_id` only through the established
-> `safe=1` rsid map, retains `CO_IES_base` for exact CAPES-v1 replication, and
-> publishes regex-v1 `CO_IES` as the final canonical institution code.
+> `(source_file, source_row)`, assigns canonical `OA_id` from the unique global
+> OpenAlex hierarchy selection, retains the former `safe=1` rsid assignment as
+> `OA_id_safe`, retains `CO_IES_base` for exact CAPES-v1 replication, and publishes
+> regex-v1 `CO_IES` as the final canonical institution code.
 > Everything here runs **locally, outside SEDAP**, and nothing here may be copied into
 > `scripts_sedap/` — see `AGENTS.md` → *Execution Environments*.
 >
@@ -42,12 +43,14 @@ revelio_br_cohort_user_ids.R
 
 `ranked_education_flags.R` reads
 `university_identity_crosswalk/education_row_identity/`, so OA and e-MEC
-identities are present before education flags are aggregated. `OA_id` uses only
-the established 655-row `safe=1` rsid map. `CO_IES_base` preserves the exact
-institution assignments used by the saved CAPES-v1 match; `CO_IES` contains the
-regex-v1 extension. The compact crosswalks retain distinct
+identities are present before education flags are aggregated. `OA_id` is the
+unique global-hierarchy selection; `OA_id_safe` preserves the established
+655-row `safe=1` rsid map. `CO_IES_base` preserves the exact institution
+assignments used by the saved CAPES-v1 match; `CO_IES` contains the regex-v1
+extension. The canonical compact crosswalk retains distinct
 `university_raw`–`OA_id`–`CO_IES` combinations rather than forcing an unsafe
-raw-name-only mapping.
+raw-name-only mapping. The separate CAPES-v1 compact crosswalk continues to
+publish `OA_id_safe` under the legacy `OA_id` name.
 
 The active CAPES default is `OBMEP_MATCH_COHORT=degree_duration` (the retained
 environment value is a compatibility label). Maintainer matching accepts
@@ -142,7 +145,7 @@ entrypoints now live under `archive/legacy_cohorts/`; they are not active stages
 | 8x-test | `emec_regex_recovery_tests.R` | — | 8x output + the fixed reviewed unmatched sample | Acceptance report for 57 intended recoveries and 43 retained rejections |
 | 8x-check | `verify_emec_regex_recovery.R` | — | 8x output + immutable 8v inputs | Full-partition preservation and recovery-invariant verification JSON |
 | 8y | `emec_regex_sample_export.R` | — | 8x enriched education + first sample workbook | JSON source for a new, disjoint 100-matched/100-unmatched valid-degree review workbook |
-| 8z | `build_university_raw_oa_co_ies_crosswalk.R` | — | 8v + 8x + safe rsid–OA map | row-faithful identity parts plus compact final and CAPES-v1 crosswalks |
+| 8z | `build_university_raw_oa_co_ies_crosswalk.R` | — | 8v + 8x + global hierarchy + safe rsid–OA map | row-faithful identity parts plus compact final and CAPES-v1 crosswalks |
 | | **Employer flags** | | | |
 | 18 | `linkedin_company_rcid.R` | Athena | the two company CSVs + Revelio | OBMEP `linkedin_company_urls/linkedin_company_rcid_2026.parquet` + `..._unresolved_...` |
 | 18a | `archive/legacy_cohorts/ranked_university_company_rcid.R` | Athena | historical ranked catalogs | archived legacy employer crosswalk |
@@ -154,6 +157,7 @@ entrypoints now live under `archive/legacy_cohorts/`; they are not active stages
 | 20 | `obmep_candidates_step_1_ruf_degree.R` | — | global hierarchy + OpenAlex snapshot + 15 + 15a + 7 | OBMEP `revelio_br_cohort/obmep_candidates_step_1_ruf_degree.parquet` |
 | | **The selected candidates** | | | |
 | 21 | `obmep_candidates_selected.R` | — | 8r + 19b + GTAllocation LinkedIn names | canonical `obmep_candidates_selected.parquet` |
+| 21p | `processed_selected_products.R` | — | 8z row identity + 21 + canonical education, position and position-RCID parts | `Data/processed/`: row-level identity crosswalk, selected profiles, their education and positions — see *Processed products* |
 | 21-legacy | `archive/legacy_cohorts/obmep_candidates_selected.R` | — | historical flags | archived pre-degree-duration selection |
 | 21alt | `archive/legacy_cohorts/obmep_candidates_selected_alt.R` | — | historical alternative flags | archived alternative selection |
 | | **CAPES stricto sensu discentes** | | | |
@@ -170,6 +174,37 @@ entrypoints now live under `archive/legacy_cohorts/`; they are not active stages
 | | **CWUR Global 2000** | | | |
 | 28 | `cwur_global_2000.R` | cwur.org | the Global 2000 HTML table | OBMEP `cwur_ranking/cwur_global_2000_2026.parquet` + `raw/2026/cwur_2026.html` |
 | 28a | `cwur_openalex_crosswalk.R` | — | 28 + 4 + the OpenAlex snapshot under `GT_ROOT` | OBMEP `cwur_ranking/cwur_openalex_2026.parquet` + `cwur_openalex_unmatched_2026.csv` |
+
+## Processed products — `Data/processed/` (2026-09-26)
+
+`processed_selected_products.R` (21p) publishes the consumable products next to `Data/raw` and
+`Data/intermediate`. It is local and offline, reads only from `Data/intermediate/revelio_br_cohort`,
+and **copies or filters; it never moves a source**: the row identity parts stay where
+`ranked_education_flags.R` and the CAPES scripts read them. It stages under
+`Data/processed/.staging_<run_id>/`, refuses to overwrite any target, checks that every source's
+size and mtime are unchanged, and records sources, counts and output md5s in
+`processed_manifest.json`.
+
+| Product | Rows | Users | Content |
+|---|---:|---:|---|
+| `crosswalks/education_entry_oa_id_co_ies.parquet` | 19,710,307 | 8,901,904 | `user_id, source_file, source_row, university_raw, OA_id, OA_id_safe, CO_IES, CO_IES_base, co_ies_source` |
+| `obmep_candidates_selected.parquet` | 2,289,937 | 2,289,937 | byte copy of the canonical 91-column selection (contains `fullname`) |
+| `obmep_candidates_selected_education.parquet` | 5,849,268 | 2,289,937 | 19 education-history fields + `source_file, source_row` + the five identity columns |
+| `obmep_candidates_selected_positions/` (7 parts) | 12,185,767 | 2,289,937 | 28 position fields + `rcid, ultimate_parent_rcid` (LEFT JOIN on `position_id`) |
+
+The crosswalk is one row per education entry and must be joined on `(source_file, source_row)`,
+never on `university_raw`: the same raw string resolves to different identities across entries, so
+a raw-only join fans out on 34% of matched entries and invents matches for 840,340 unmatched ones.
+Its OA / CO_IES / both / either counts (13,304,177 / 11,746,464 / 9,827,794 / 15,222,847)
+reproduce the 8z report exactly. Among the selected users' entries, 4,832,708 of 5,849,268
+(82.6%) carry an `OA_id` or `CO_IES`; 10,162,020 of 12,185,767 positions (83.4%) carry an `rcid`.
+Every selected user has at least one education entry and at least one position. The education
+row count equals the raw `obmep_candidates_step_1_education` count for the same users.
+
+Dropbox can briefly deny renaming a freshly written folder while it indexes it; the promotion step
+retries for up to five minutes. The first run hit this on the positions folder after all checks
+had passed. The folder and manifest were promoted by hand after their md5s were checked against
+the manifest.
 
 ## TO-DO
 
@@ -3865,7 +3900,7 @@ Outputs:
   `revelio_database.obmep_candidates_step_1_degree_duration_education`.
 - S3: `s3://revelio-misc/obmep_candidates_step_1_degree_duration/` and
   `s3://revelio-misc/exports/obmep_candidates_step_1_education/`.
-- Dropbox: `obmep_candidates_step_1_degree_duration.parquet`,
+- Dropbox: `obmep_candidates_step_1.parquet`,
   `obmep_candidates_step_1_education/`, the 100-row sample CSV, JSON report and
   scan-ledger CSV in `Data/intermediate/revelio_br_cohort/`.
 
@@ -3903,7 +3938,7 @@ Outputs:
 
 - Athena: `revelio_database.obmep_candidates_step_1_degree_duration_position`.
 - S3: `s3://revelio-misc/exports/obmep_candidates_step_1_degree_duration_position/`.
-- Dropbox: `obmep_candidates_step_1_degree_duration_position/`, its JSON report and scan-ledger CSV
+- Dropbox: `obmep_candidates_step_1_position/`, its JSON report and scan-ledger CSV
   in `Data/intermediate/revelio_br_cohort/`.
 
 The script downloads into a temporary directory, validates locally with DuckDB, and only then
@@ -8024,6 +8059,34 @@ Rscript prep/building_external_data/emec_regex_recovery.R
 Rscript prep/building_external_data/emec_regex_recovery_tests.R
 Rscript prep/building_external_data/verify_emec_regex_recovery.R
 Rscript prep/building_external_data/emec_regex_sample_export.R
+```
+
+### Canonical university identity crosswalk — script 8z (2026-09-18)
+
+`build_university_raw_oa_co_ies_crosswalk.R` combines the unique global
+OpenAlex hierarchy selection with the two e-MEC versions at the physical
+`(source_file, source_row)` education-entry grain. Canonical `OA_id` is populated
+if and only if `global_oa_selected_count = 1`; entries with multiple retained OA
+IDs remain scalar-unresolved. `OA_hierarchy_id` is retained as an equal
+compatibility alias. The former safe rsid assignment is preserved separately as
+`OA_id_safe` in the row-faithful parts.
+
+Across all 19,710,307 education entries, 13,304,177 have canonical `OA_id`,
+10,223,542 have `OA_id_safe`, 11,746,464 have final `CO_IES`, and 9,827,794 have
+both canonical IDs. The compact canonical product contains 466,978 distinct
+`university_raw`–`OA_id`–`CO_IES` combinations.
+
+Under the canonical effective-degree definition — stored `ranked_level`, changed
+to `bachelor` when `degree` is empty and `degree_matches_laxed = 1` — there are
+12,112,593 Bachelor/Master/PhD entries. Of these, **10,779,365 (88.993%)** have
+canonical `OA_id` or final `CO_IES`.
+
+The separate `university_raw_oa_id_co_ies_capes_v1.parquet` remains a 148,215-row
+compatibility product: its field named `OA_id` is `OA_id_safe`, and its `CO_IES`
+is `CO_IES_base`. It is row-for-row unchanged by the canonical OA replacement.
+
+```powershell
+Rscript prep/building_external_data/build_university_raw_oa_co_ies_crosswalk.R
 ```
 
 ---
