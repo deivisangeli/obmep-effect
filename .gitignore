@@ -1,0 +1,8 @@
+# Local scratch and tool artifacts, not part of the pipeline
+scratchpad/
+.codex/
+
+# R session noise
+.Rhistory
+.RData
+.Rproj.user/
